@@ -149,8 +149,8 @@ class RemoteWorkbook:
     def __getattr__(self, name):
         return getattr(self._workbook, name)
 
-    def save(self, _path: str | None = None) -> None:
-        save_workbook_to_sheets(self._workbook)
+    def save(self, _path: str | None = None) -> dict[str, dict[str, int]]:
+        return save_workbook_to_sheets(self._workbook)
 
     def close(self) -> None:
         self._workbook.close()
@@ -190,25 +190,45 @@ def _ensure_remote_sheet(title: str) -> None:
     ).execute()
 
 
-def save_workbook_to_sheets(wb: Workbook) -> None:
+def save_workbook_to_sheets(wb: Workbook) -> dict[str, dict[str, int]]:
+    """Sincroniza el libro completo y confirma que Google aceptó cada escritura.
+
+    La API de Google responde con el número de filas y celdas actualizadas. Si
+    una escritura no devuelve el mínimo esperado, se interrumpe la petición en
+    vez de informar éxito sin que los datos hayan llegado a la hoja remota.
+    """
     service = _sheets_service()
     spreadsheet_id = os.environ[SHEETS_ID_ENV]
     existing = {p["title"] for p in _sheet_properties()}
+    results: dict[str, dict[str, int]] = {}
     for title in wb.sheetnames:
         if title not in existing:
             _ensure_remote_sheet(title)
+            existing.add(title)
         range_name = _title_range(title)
         service.spreadsheets().values().clear(
             spreadsheetId=spreadsheet_id, range=range_name, body={}
         ).execute()
         values = _trimmed_values(wb[title])
-        if values:
-            service.spreadsheets().values().update(
-                spreadsheetId=spreadsheet_id,
-                range=f"'{title.replace(chr(39), chr(39) + chr(39))}'!A1",
-                valueInputOption="RAW",
-                body={"values": values},
-            ).execute()
+        if not values:
+            results[title] = {"rows": 0, "cells": 0}
+            continue
+        expected_cells = sum(len(row) for row in values)
+        response = service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{title.replace(chr(39), chr(39) + chr(39))}'!A1",
+            valueInputOption="RAW",
+            body={"values": values},
+        ).execute()
+        updated_cells = int(response.get("updatedCells", 0))
+        updated_rows = int(response.get("updatedRows", 0))
+        if updated_cells < expected_cells or updated_rows < len(values):
+            raise RuntimeError(
+                f"Google Sheets no confirmó la escritura completa de la pestaña '{title}' "
+                f"({updated_rows}/{len(values)} filas, {updated_cells}/{expected_cells} celdas)."
+            )
+        results[title] = {"rows": updated_rows, "cells": updated_cells}
+    return results
 
 
 def workbook_to_bytes(local_path: str) -> bytes:
@@ -337,7 +357,37 @@ def sync_seed_workbooks(local_paths: Iterable[str]) -> None:
 
 
 def storage_status() -> dict:
-    return {
-        "backend": "google_sheets" if sheets_enabled() else "excel_local",
-        "spreadsheet_configured": bool(os.getenv(SHEETS_ID_ENV)),
-    }
+    """Devuelve el estado verificado sin exponer ninguna credencial."""
+    spreadsheet_id = os.getenv(SHEETS_ID_ENV, "").strip()
+    configured = bool(spreadsheet_id)
+    try:
+        enabled = sheets_enabled()
+    except Exception as exc:
+        return {
+            "backend": "google_sheets",
+            "spreadsheet_configured": configured,
+            "remote_connected": False,
+            "error": str(exc),
+        }
+    if not enabled:
+        return {
+            "backend": "excel_local",
+            "spreadsheet_configured": configured,
+            "remote_connected": False,
+        }
+    try:
+        titles = [item["title"] for item in _sheet_properties()]
+        return {
+            "backend": "google_sheets",
+            "spreadsheet_configured": True,
+            "remote_connected": True,
+            "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+            "sheet_titles": titles,
+        }
+    except Exception as exc:
+        return {
+            "backend": "google_sheets",
+            "spreadsheet_configured": True,
+            "remote_connected": False,
+            "error": str(exc),
+        }

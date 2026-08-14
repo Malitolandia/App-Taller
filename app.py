@@ -34,7 +34,11 @@ def menu():
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, **storage_status()})
+    status = storage_status()
+    # En Google Sheets, "ok" exige una lectura real de metadatos de la hoja.
+    # Así no se confunde una variable presente con una conexión utilizable.
+    ok = status.get("remote_connected", True)
+    return jsonify({"ok": ok, **status}), (200 if ok else 503)
 
 def existing_or_template(data_path: Path, template_path: Path) -> str:
     return str(data_path if data_path.exists() else template_path)
