@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vene Autos · Panel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Bebas+Neue&display=swap">
+<style>
+  :root{--bg:#0a0c10;--s1:#111318;--s2:#181c24;--br:#1e2330;--ac:#00e5a0;--rd:#ff4f64;--yw:#ffb800;--bl:#3d8bff;--tx:#e8ecf4;--tm:#6b7590}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:radial-gradient(circle at 20% -10%,#10241d 0%,var(--bg) 45%),var(--bg);color:var(--tx);font-family:'Space Grotesk',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:60px 24px}
+  header{text-align:center;margin-bottom:42px}.eyebrow{font-size:11px;letter-spacing:4px;color:var(--ac);text-transform:uppercase;margin-bottom:10px}h1{font-family:'Bebas Neue',sans-serif;font-size:54px;letter-spacing:3px}header p{color:var(--tm);font-size:13px;margin-top:8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;width:100%;max-width:1000px}.card{position:relative;background:var(--s1);border:1px solid var(--br);border-radius:16px;padding:28px 24px;overflow:hidden;text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:14px;transition:transform .25s,border-color .25s}.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--kc,var(--ac))}.card:hover{transform:translateY(-4px);border-color:#2a3048}.card-top{display:flex;align-items:flex-start;justify-content:space-between}.icon{width:46px;height:46px;border-radius:12px;background:var(--kc,var(--ac));color:#000;display:flex;align-items:center;justify-content:center;font-size:22px}.status{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tm)}.dot{width:8px;height:8px;border-radius:50%;background:var(--rd);transition:background .3s}.dot.on{background:var(--ac)}.dot.checking{background:var(--yw)}.card h2{font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:1px}.card p{font-size:12.5px;color:var(--tm);line-height:1.5}.open{margin-top:auto;align-self:flex-start;background:var(--kc,var(--ac));color:#000;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:700}
+  .backup{width:100%;max-width:1000px;margin-top:22px;background:var(--s1);border:1px solid var(--br);border-radius:16px;padding:24px;display:flex;flex-wrap:wrap;align-items:center;gap:14px}.backup-copy{flex:1;min-width:240px}.backup h2{font-size:18px;margin-bottom:6px}.backup p{color:var(--tm);font-size:12.5px;line-height:1.5}.actions{display:flex;gap:10px;flex-wrap:wrap}.btn{border:0;border-radius:8px;padding:10px 14px;cursor:pointer;font:600 12px 'Space Grotesk',sans-serif;text-decoration:none}.btn-primary{background:var(--ac);color:#000}.btn-secondary{background:var(--s2);border:1px solid var(--br);color:var(--tx)}.btn-secondary:hover{border-color:var(--ac)}#backup-status{width:100%;font-size:12px;color:var(--tm)}
+  footer{margin-top:36px;font-size:11px;color:var(--tm);text-align:center}
+</style>
+</head>
+<body>
+<header><div class="eyebrow">Vene Autos</div><h1>Panel de Aplicaciones</h1><p>Accede a tus módulos y administra los respaldos desde un único lugar.</p></header>
+<div class="grid">
+  <a class="card" style="--kc:var(--yw)" href="/neveras" data-health="/neveras">
+    <div class="card-top"><div class="icon">N</div><div class="status"><span class="dot"></span><span>verificando…</span></div></div>
+    <h2>Control Neveras</h2><p>Ventas, inventario, deudas y clientes del negocio de neveras.</p><span class="open">Abrir sistema →</span>
+  </a>
+  <a class="card" style="--kc:var(--ac)" href="/control" data-health="/control">
+    <div class="card-top"><div class="icon">T</div><div class="status"><span class="dot"></span><span>verificando…</span></div></div>
+    <h2>Nómina y Gastos</h2><p>Comisiones de mecánicos, trabajos por semana y gastos del taller.</p><span class="open">Abrir sistema →</span>
+  </a>
+  <a class="card" style="--kc:var(--bl)" href="/peritaje" data-health="/peritaje">
+    <div class="card-top"><div class="icon">P</div><div class="status"><span class="dot"></span><span>verificando…</span></div></div>
+    <h2>Peritaje Vehicular</h2><p>Inspección de vehículos, informes y exportación a PDF / Excel.</p><span class="open">Abrir sistema →</span>
+  </a>
+</div>
+<section class="backup">
+  <div class="backup-copy"><h2>Respaldo de base de datos</h2><p>Descarga un archivo XLSX con las pestañas de los tres módulos o carga un respaldo anterior. La carga reemplaza las pestañas correspondientes.</p></div>
+  <div class="actions"><a class="btn btn-primary" href="/api/db/export">Descargar base de datos</a><label class="btn btn-secondary" for="db-file">Cargar base de datos</label><input id="db-file" type="file" accept=".xlsx,.xlsm" hidden></div>
+  <div id="backup-status"></div>
+</section>
+<footer>En producción los datos se guardan en Google Sheets cuando las variables de conexión están configuradas.</footer>
+<script>
+  document.querySelectorAll('.card').forEach(card => {
+    const dot = card.querySelector('.dot'), text = card.querySelector('.status span:last-child');
+    dot.className = 'dot checking';
+    fetch(card.dataset.health, {cache:'no-store'}).then(r => { if (!r.ok) throw new Error(); dot.className='dot on'; text.textContent='en línea'; }).catch(() => { dot.className='dot'; text.textContent='no disponible'; });
+  });
+  const fileInput = document.getElementById('db-file'), status = document.getElementById('backup-status');
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files[0]; if (!file) return;
+    if (!confirm('La carga reemplazará las pestañas del respaldo. ¿Deseas continuar?')) { fileInput.value=''; return; }
+    const form = new FormData(); form.append('file', file); status.textContent='Cargando respaldo…';
+    try { const res = await fetch('/api/db/import', {method:'POST', body:form}); const data=await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo cargar el respaldo'); status.textContent=`Respaldo cargado: ${data.imported_sheets.length} pestañas actualizadas.`; }
+    catch (err) { status.textContent='Error: ' + err.message; }
+    finally { fileInput.value=''; }
+  });
+</script>
+</body>
+</html>
