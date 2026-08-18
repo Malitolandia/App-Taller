@@ -617,6 +617,31 @@ def agregar_filas_venta(cliente, items, metodo, pago):
     try:
         wb = load_workbook_for_app(EXCEL_PATH)
         ws = wb['Ventas']
+        ws_inv = wb['Inventario']
+
+        # Validar disponibilidad usando el mismo libro cargado. Se descuenta
+        # cada línea de forma acumulada para evitar vender más que el stock
+        # cuando una compra repite el mismo producto.
+        stock_disponible = {}
+        for fila_inv in ws_inv.iter_rows(min_row=2, values_only=True):
+            nombre_inv = str(_at(fila_inv, 0) or '').strip()
+            if not nombre_inv:
+                continue
+            stock_disponible[nombre_inv.casefold()] = _as_int(_at(fila_inv, 4))
+        for fila_venta in ws.iter_rows(min_row=2, values_only=True):
+            producto_vendido = str(_at(fila_venta, 4) or '').strip().casefold()
+            if producto_vendido in stock_disponible:
+                stock_disponible[producto_vendido] -= _as_int(_at(fila_venta, 5))
+        for producto, cantidad in items:
+            clave = str(producto or '').strip().casefold()
+            disponible = stock_disponible.get(clave)
+            if disponible is None:
+                wb.close()
+                return False, f"El producto '{producto}' no existe en el inventario"
+            if cantidad > disponible:
+                wb.close()
+                return False, f"No hay existencias suficientes de '{producto}'. Disponibles: {max(disponible, 0)}"
+            stock_disponible[clave] -= cantidad
 
         ahora  = datetime.now()
         estado = '✅ PAGADO' if pago.upper() == 'SI' else '🔴 PENDIENTE'
@@ -865,7 +890,8 @@ def nueva_venta():
 
     ok, err = agregar_filas_venta(cliente, items, metodo, pago)
     if not ok:
-        return jsonify({'error': err}), 500
+        status = 409 if err and ('existencias' in err or 'no existe en el inventario' in err) else 500
+        return jsonify({'ok': False, 'error': err}), status
 
     prods  = leer_inventario_base()
     ventas = leer_ventas(prods)

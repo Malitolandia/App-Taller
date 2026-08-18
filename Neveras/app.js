@@ -331,10 +331,12 @@ let itemsVenta = [];
 
 function optionsProductosHTML(seleccionado) {
   let html = '<option value="">Seleccionar...</option>';
-  D.inventario.forEach(i => {
-    const sel = i.producto === seleccionado ? 'selected' : '';
-    html += `<option value="${i.producto}" ${sel}>${i.producto} — $${i.precio.toLocaleString('es-CO')} (stock: ${i.stockAct})</option>`;
-  });
+  D.inventario
+    .filter(i => Number(i.stockAct) > 0)
+    .forEach(i => {
+      const sel = i.producto === seleccionado ? 'selected' : '';
+      html += `<option value="${i.producto}" ${sel}>${i.producto} — $${i.precio.toLocaleString('es-CO')} (stock: ${i.stockAct})</option>`;
+    });
   return html;
 }
 
@@ -370,6 +372,12 @@ function eliminarItem(idx) {
 
 function cambiarProductoItem(idx, valor) {
   const inv = D.inventario.find(i => i.producto === valor);
+  if (valor && (!inv || Number(inv.stockAct) <= 0)) {
+    toast('⚠️ Ese producto no tiene existencias disponibles', true);
+    itemsVenta[idx] = { producto: '', cantidad: 1, precio: 0, ganUnit: 0 };
+    renderItems();
+    return;
+  }
   itemsVenta[idx].producto = valor;
   itemsVenta[idx].precio   = inv ? inv.precio  : 0;
   itemsVenta[idx].ganUnit  = inv ? inv.ganUnit : 0;
@@ -430,6 +438,17 @@ async function guardarVenta() {
   const items = itemsVenta.filter(it => it.producto && it.cantidad > 0);
   if (items.length === 0)               { toast('⚠️ Agrega al menos un producto', true); return; }
   if (items.length !== itemsVenta.length) { toast('⚠️ Revisa los productos y cantidades', true); return; }
+
+  const cantidadesPorProducto = {};
+  for (const item of items) {
+    const inv = D.inventario.find(i => i.producto === item.producto);
+    const stock = inv ? Number(inv.stockAct) : 0;
+    cantidadesPorProducto[item.producto] = (cantidadesPorProducto[item.producto] || 0) + item.cantidad;
+    if (!inv || stock <= 0 || cantidadesPorProducto[item.producto] > stock) {
+      toast(`⚠️ No hay existencias suficientes de ${item.producto}`, true);
+      return;
+    }
+  }
 
   if (remoteReady) {
     const btn = document.querySelector('.btn-save');
