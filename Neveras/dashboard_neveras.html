@@ -261,7 +261,8 @@
     <div class="mrow full">
       <div>
         <label for="p-nombre">Nombre del producto</label>
-        <input id="p-nombre" type="text" maxlength="120" placeholder="Ej. Gaseosa 1.5 L" autocomplete="off">
+        <input id="p-nombre" type="text" maxlength="120" list="lista-productos" placeholder="Ej. Gaseosa 1.5 L" autocomplete="off" aria-describedby="p-nombre-ayuda">
+        <datalist id="lista-productos"></datalist>
       </div>
     </div>
 
@@ -287,8 +288,8 @@
       </div>
     </div>
 
-    <div style="font-size:12px;color:var(--tm);line-height:1.5;margin-top:4px">
-      El producto se guardará directamente en la pestaña <strong style="color:var(--tx)">Inventario</strong> de Google Sheets.
+    <div id="p-nombre-ayuda" style="font-size:12px;color:var(--tm);line-height:1.5;margin-top:4px">
+      Puedes elegir un producto existente de la lista o escribir un nombre nuevo. El producto se guardará directamente en la pestaña <strong style="color:var(--tx)">Inventario</strong> de Google Sheets.
     </div>
 
     <div class="mbtns">

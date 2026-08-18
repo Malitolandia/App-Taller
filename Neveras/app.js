@@ -249,7 +249,29 @@ function rClientes() {
   ).join('');
 }
 
-function renderAll() { rDash(); rVentas(); rInv(); rDeudas(); rClientes(); }
+function actualizarSugerenciasProductos() {
+  const lista = $('lista-productos');
+  if (!lista) return;
+
+  lista.innerHTML = '';
+  const vistos = new Set();
+  (Array.isArray(D.inventario) ? D.inventario : []).forEach(item => {
+    const nombre = String(item.producto || '').trim();
+    const clave = nombre.toLocaleUpperCase('es-CO');
+    if (!nombre || vistos.has(clave)) return;
+    vistos.add(clave);
+
+    const opcion = document.createElement('option');
+    opcion.value = nombre;
+    opcion.label = `${nombre} — ${fmt(item.precio)} · stock ${Number(item.stockAct || 0)}`;
+    lista.appendChild(opcion);
+  });
+}
+
+function renderAll() {
+  rDash(); rVentas(); rInv(); rDeudas(); rClientes();
+  actualizarSugerenciasProductos();
+}
 
 // ── INTEGRACIÓN CON SERVIDOR ──────────────────────────────────
 const API = `${window.location.pathname.startsWith('/neveras') ? '/neveras' : ''}/api`;
