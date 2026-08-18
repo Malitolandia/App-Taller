@@ -145,6 +145,19 @@ th {
 }
 td { padding: 11px 14px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,.03); }
 tr:hover td { background: rgba(255,255,255,.02); }
+.inv-actions { white-space: nowrap; text-align: right; }
+.inv-action-btn {
+  width: 29px; height: 29px; margin-left: 4px; padding: 0;
+  border: 1px solid var(--br); border-radius: 7px;
+  background: rgba(255,255,255,.04); color: var(--tx);
+  cursor: pointer; transition: all .2s; font-size: 13px;
+}
+.inv-action-btn:hover { border-color: var(--ac); background: rgba(0,229,160,.12); transform: translateY(-1px); }
+.inv-action-btn.danger:hover { border-color: var(--rd); background: rgba(255,77,109,.12); }
+.inventory-modal-help {
+  margin-top: 8px; color: var(--tm); font-size: 12px;
+  line-height: 1.5; min-height: 18px;
+}
 tr:last-child td { border-bottom: none; }
 
 /* ── PILLS ────────────────────────────────────── */

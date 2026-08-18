@@ -198,8 +198,9 @@ function rInv() {
     </div>`;
   }).join('');
 
-  $('ti').querySelector('tbody').innerHTML = inv.map(i =>
-    `<tr>
+  $('ti').querySelector('tbody').innerHTML = inv.map(i => {
+    const productoCodificado = encodeURIComponent(String(i.producto || '')).replace(/'/g, '%27');
+    return `<tr>
       <td style="font-weight:600">${i.producto}</td>
       <td>${i.costo ? fmt(i.costo) : '—'}</td>
       <td>${fmt(i.precio)}</td>
@@ -208,8 +209,13 @@ function rInv() {
       <td>${i.vendidos}</td>
       <td style="font-weight:700;color:${i.stockAct < 0 ? 'var(--rd)' : i.stockAct <= i.stockMin ? 'var(--yw)' : 'var(--ac)'}">${i.stockAct}</td>
       <td>${i.estado}</td>
-    </tr>`
-  ).join('');
+      <td class="inv-actions">
+        <button type="button" class="inv-action-btn" onclick="abrirEditarProducto(decodeURIComponent('${productoCodificado}'))" title="Editar producto">✏️</button>
+        <button type="button" class="inv-action-btn" onclick="abrirAjusteExistencias(decodeURIComponent('${productoCodificado}'))" title="Modificar existencias">📦</button>
+        <button type="button" class="inv-action-btn danger" onclick="eliminarProducto(decodeURIComponent('${productoCodificado}'))" title="Eliminar producto">🗑️</button>
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 // ── RENDER DEUDAS ─────────────────────────────────────────────
@@ -592,6 +598,11 @@ async function guardarProducto() {
     return;
   }
 
+  if (!confirm(`¿Guardar el nuevo producto "${producto}" en el inventario?`)) {
+    toast('Alta de producto cancelada');
+    return;
+  }
+
   const btn = $('p-save');
   btn.disabled = true;
   btn.textContent = '⏳ Guardando en Google Sheets...';
@@ -624,6 +635,211 @@ async function guardarProducto() {
   } finally {
     btn.disabled = false;
     btn.textContent = '💾 Guardar producto';
+  }
+}
+
+// ── GESTIÓN DE INVENTARIO ────────────────────────────────────
+let productoEdicionActual = null;
+let productoStockActual = null;
+
+function abrirEditarProducto(producto) {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; no se puede editar el inventario.', true);
+    return;
+  }
+  const item = D.inventario.find(i => i.producto === producto);
+  if (!item) {
+    toast('No se encontró el producto seleccionado.', true);
+    return;
+  }
+
+  productoEdicionActual = item;
+  $('ep-nombre').value = item.producto || '';
+  $('ep-costo').value = Number(item.costo || 0).toFixed(2);
+  $('ep-precio').value = Number(item.precio || 0).toFixed(2);
+  $('ep-stock-min').value = Number(item.stockMin || 0);
+  $('ep-ayuda').textContent = `Existencia actual: ${Number(item.stockAct || 0)} · Unidades vendidas: ${Number(item.vendidos || 0)}. Las ventas históricas conservan sus precios y ganancias; el nuevo precio aplicará a ventas futuras.`;
+  $('editar-producto-overlay').classList.add('open');
+  $('ep-nombre').focus();
+}
+
+function cerrarEditarProducto() {
+  $('editar-producto-overlay').classList.remove('open');
+  productoEdicionActual = null;
+}
+
+async function guardarEdicionProducto() {
+  if (!productoEdicionActual || !remoteReady) {
+    toast('Google Sheets no está disponible; no se guardaron los cambios.', true);
+    return;
+  }
+
+  const producto = $('ep-nombre').value.trim();
+  const costo = Number($('ep-costo').value);
+  const precio = Number($('ep-precio').value);
+  const stockMin = Number($('ep-stock-min').value);
+  const stockInicial = Number(productoEdicionActual.stockAct || 0) + Number(productoEdicionActual.vendidos || 0);
+
+  if (!producto || ![costo, precio, stockMin].every(Number.isFinite)
+      || [costo, precio, stockMin].some(value => value < 0)
+      || !Number.isInteger(stockMin)) {
+    toast('⚠️ Revisa nombre, costos y stock mínimo', true);
+    return;
+  }
+
+  if (!confirm(`¿Confirmar los cambios del producto "${productoEdicionActual.producto}"?`)) {
+    toast('Edición cancelada');
+    return;
+  }
+
+  const btn = $('ep-save');
+  btn.disabled = true;
+  btn.textContent = '⏳ Guardando cambios...';
+  try {
+    const response = await fetch(API + '/editar-producto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productoOriginal:         productoEdicionActual.producto,
+        producto,
+
+        costo,
+        precio,
+        stockInicial,
+        stockMin,
+      }),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      toast('Error: ' + (data.error || `HTTP ${response.status}`), true);
+      return;
+    }
+    D.ventas = data.ventas;
+    D.inventario = data.inventario;
+    D.clientes = data.clientes;
+    renderAll();
+    cerrarEditarProducto();
+    toast(data.mensaje || '✅ Producto actualizado');
+  } catch (error) {
+    toast('No se pudo conectar al servidor: ' + (error.message || 'error de red'), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Guardar cambios';
+  }
+}
+
+function abrirAjusteExistencias(producto) {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; no se puede modificar el stock.', true);
+    return;
+  }
+  const item = D.inventario.find(i => i.producto === producto);
+  if (!item) {
+    toast('No se encontró el producto seleccionado.', true);
+    return;
+  }
+
+  productoStockActual = item;
+  $('stock-producto').textContent = item.producto || '';
+  $('stock-actual').value = String(Math.max(0, Number(item.stockAct || 0)));
+  $('stock-ayuda').textContent = `Existencia actual: ${Number(item.stockAct || 0)} · Vendidas históricas: ${Number(item.vendidos || 0)}. Este ajuste no borra ventas.`;
+  $('stock-overlay').classList.add('open');
+  $('stock-actual').focus();
+  $('stock-actual').select();
+}
+
+function cerrarAjusteExistencias() {
+  $('stock-overlay').classList.remove('open');
+  productoStockActual = null;
+}
+
+async function guardarAjusteExistencias() {
+  if (!productoStockActual || !remoteReady) {
+    toast('Google Sheets no está disponible; no se modificaron las existencias.', true);
+    return;
+  }
+
+  const stockActual = Number($('stock-actual').value);
+  if (!Number.isFinite(stockActual) || stockActual < 0 || !Number.isInteger(stockActual)) {
+    toast('⚠️ La existencia debe ser un número entero no negativo', true);
+    return;
+  }
+
+  const anterior = Number(productoStockActual.stockAct || 0);
+  if (!confirm(`¿Cambiar las existencias de "${productoStockActual.producto}" de ${anterior} a ${stockActual}?`)) {
+    toast('Ajuste de existencias cancelado');
+    return;
+  }
+
+  const btn = $('stock-save');
+  btn.disabled = true;
+  btn.textContent = '⏳ Guardando existencias...';
+  try {
+    const response = await fetch(API + '/ajustar-existencias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ producto: productoStockActual.producto, stockActual }),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      toast('Error: ' + (data.error || `HTTP ${response.status}`), true);
+      return;
+    }
+    D.ventas = data.ventas;
+    D.inventario = data.inventario;
+    D.clientes = data.clientes;
+    renderAll();
+    cerrarAjusteExistencias();
+    toast(data.mensaje || '✅ Existencias actualizadas');
+  } catch (error) {
+    toast('No se pudo conectar al servidor: ' + (error.message || 'error de red'), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Guardar existencias';
+  }
+}
+
+async function eliminarProducto(producto) {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; no se puede eliminar el producto.', true);
+    return;
+  }
+  const item = D.inventario.find(i => i.producto === producto);
+  if (!item) {
+    toast('No se encontró el producto seleccionado.', true);
+    return;
+  }
+  const vendidos = Number(item.vendidos || 0);
+  if (vendidos > 0) {
+    alert(`No se puede eliminar "${producto}" porque tiene ${vendidos} unidades vendidas. Puedes editarlo o ajustar sus existencias.`);
+    return;
+  }
+  if (!confirm(`¿Eliminar definitivamente el producto "${producto}" del inventario? Esta acción no se puede deshacer.`)) {
+    toast('Eliminación cancelada');
+    return;
+  }
+
+  try {
+    const response = await fetch(API + '/eliminar-producto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ producto }),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      toast('Error: ' + (data.error || `HTTP ${response.status}`), true);
+      return;
+    }
+    D.ventas = data.ventas;
+    D.inventario = data.inventario;
+    D.clientes = data.clientes;
+    renderAll();
+    toast(data.mensaje || '✅ Producto eliminado');
+  } catch (error) {
+    toast('No se pudo conectar al servidor: ' + (error.message || 'error de red'), true);
   }
 }
 

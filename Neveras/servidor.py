@@ -272,6 +272,212 @@ def agregar_producto(producto, costo, precio, stock_inicial, stock_minimo):
             wb.close()
 
 
+def _fila_inventario(ws, producto):
+    """Busca un producto por nombre sin distinguir mayúsculas/minúsculas."""
+    clave = str(producto or '').strip().casefold()
+    if not clave:
+        return None
+    for fila in range(2, max(int(ws.max_row or 1), 1) + 1):
+        valor = ws.cell(row=fila, column=1).value
+        if valor is not None and str(valor).strip().casefold() == clave:
+            return fila
+    return None
+
+
+def _unidades_vendidas_en_libro(ws_ventas, producto):
+    """Cuenta unidades vendidas de un producto desde la hoja Ventas."""
+    clave = str(producto or '').strip().casefold()
+    vendidas = 0
+    for fila in range(2, max(int(ws_ventas.max_row or 1), 1) + 1):
+        if ws_ventas.cell(row=fila, column=2).value in (None, ''):
+            continue
+        nombre = str(ws_ventas.cell(row=fila, column=5).value or '').strip().casefold()
+        if nombre == clave:
+            vendidas += _as_int(ws_ventas.cell(row=fila, column=6).value)
+    return vendidas
+
+
+def _congelar_ventas_historicas(ws_ventas, producto, precio, costo):
+    """Conserva precio, total y ganancia de ventas anteriores a la edición."""
+    clave = str(producto or '').strip().casefold()
+    gan_unit = round(precio - costo, 2)
+    for fila in range(2, max(int(ws_ventas.max_row or 1), 1) + 1):
+        if ws_ventas.cell(row=fila, column=2).value in (None, ''):
+            continue
+        nombre = str(ws_ventas.cell(row=fila, column=5).value or '').strip().casefold()
+        if nombre != clave:
+            continue
+        cantidad = _as_int(ws_ventas.cell(row=fila, column=6).value)
+        ws_ventas.cell(row=fila, column=7).value = precio
+        ws_ventas.cell(row=fila, column=8).value = round(cantidad * precio, 2)
+        ws_ventas.cell(row=fila, column=12).value = round(cantidad * gan_unit, 2)
+
+
+def _escribir_resumen_inventario(ws, fila, producto, costo, precio, stock_inicial, stock_minimo, vendidos):
+    """Escribe las columnas de Inventario y devuelve el resumen calculado."""
+    gan_unit = round(precio - costo, 2)
+    stock_actual = stock_inicial - vendidos
+    if stock_actual <= 0:
+        estado = '🚫 AGOTADO'
+    elif stock_actual <= stock_minimo:
+        estado = '⚠ SURTIR'
+    else:
+        estado = '✅ OK'
+
+    valores = {
+        1: producto,
+        2: costo,
+        3: precio,
+        4: gan_unit,
+        5: stock_inicial,
+        6: stock_minimo,
+        7: vendidos,
+        8: stock_actual,
+        9: estado,
+        10: round(costo * stock_inicial, 2),
+        11: round(gan_unit * stock_inicial, 2),
+    }
+    for columna, valor in valores.items():
+        ws.cell(row=fila, column=columna).value = valor
+
+    return {
+        'producto': producto,
+        'costo': costo,
+        'precio': precio,
+        'ganUnit': gan_unit,
+        'stockIni': stock_inicial,
+        'stockMin': stock_minimo,
+        'vendidos': vendidos,
+        'stockAct': stock_actual,
+        'estado': estado,
+    }
+
+
+def _validar_datos_producto(producto, costo, precio, stock_inicial, stock_minimo):
+    nombre = str(producto or '').strip()
+    if not nombre:
+        raise ValueError('El nombre del producto es obligatorio')
+    return {
+        'producto': nombre,
+        'costo': _numero_no_negativo(costo, 'Costo'),
+        'precio': _numero_no_negativo(precio, 'Precio de venta'),
+        'stockInicial': _numero_no_negativo(stock_inicial, 'Stock inicial', entero=True),
+        'stockMin': _numero_no_negativo(stock_minimo, 'Stock mínimo', entero=True),
+    }
+
+
+def editar_producto(producto_original, producto, costo, precio, stock_inicial, stock_minimo):
+    """Edita los datos de Inventario sin romper ventas históricas."""
+    datos = _validar_datos_producto(producto, costo, precio, stock_inicial, stock_minimo)
+    original = str(producto_original or '').strip()
+    if not original:
+        raise ValueError('El producto original es obligatorio')
+
+    wb = None
+    try:
+        wb = load_workbook_for_app(EXCEL_PATH)
+        ws = wb['Inventario']
+        ws_ventas = wb['Ventas']
+        fila = _fila_inventario(ws, original)
+        if fila is None:
+            return False, f"No se encontró el producto '{original}'", None
+
+        fila_otro = _fila_inventario(ws, datos['producto'])
+        if fila_otro is not None and fila_otro != fila:
+            return False, 'Ya existe otro producto con ese nombre', None
+
+        vendidos = _unidades_vendidas_en_libro(ws_ventas, original)
+        if datos['producto'].casefold() != original.casefold() and vendidos > 0:
+            return False, 'No se puede cambiar el nombre de un producto con ventas históricas', None
+
+        costo_anterior = _as_float(ws.cell(row=fila, column=2).value)
+        precio_anterior = _as_float(ws.cell(row=fila, column=3).value)
+        if vendidos > 0 and (
+            abs(datos['costo'] - costo_anterior) > 0.005
+            or abs(datos['precio'] - precio_anterior) > 0.005
+        ):
+            _congelar_ventas_historicas(ws_ventas, original, precio_anterior, costo_anterior)
+
+        resumen = _escribir_resumen_inventario(
+            ws, fila, datos['producto'], datos['costo'], datos['precio'],
+            datos['stockInicial'], datos['stockMin'], vendidos,
+        )
+        resultado = wb.save(EXCEL_PATH)
+        if not resultado or not resultado.get('Inventario'):
+            raise RuntimeError('Google Sheets no confirmó la edición de Inventario')
+        return True, f"✅ Producto '{datos['producto']}' actualizado en Google Sheets", resumen
+    finally:
+        if wb is not None:
+            wb.close()
+
+
+def ajustar_existencias(producto, stock_actual):
+    """Fija la existencia actual conservando el histórico de unidades vendidas."""
+    nombre = str(producto or '').strip()
+    if not nombre:
+        raise ValueError('El nombre del producto es obligatorio')
+    nuevo_stock = _numero_no_negativo(stock_actual, 'Nueva existencia', entero=True)
+
+    wb = None
+    try:
+        wb = load_workbook_for_app(EXCEL_PATH)
+        ws = wb['Inventario']
+        ws_ventas = wb['Ventas']
+        fila = _fila_inventario(ws, nombre)
+        if fila is None:
+            return False, f"No se encontró el producto '{nombre}'", None
+
+        vendidos = _unidades_vendidas_en_libro(ws_ventas, nombre)
+        costo = _as_float(ws.cell(row=fila, column=2).value)
+        precio = _as_float(ws.cell(row=fila, column=3).value)
+        stock_minimo = _as_int(ws.cell(row=fila, column=6).value)
+        # Stock Inicial = existencia actual deseada + histórico vendido.
+        stock_inicial = nuevo_stock + vendidos
+        resumen = _escribir_resumen_inventario(
+            ws, fila, str(ws.cell(row=fila, column=1).value).strip(),
+            costo, precio, stock_inicial, stock_minimo, vendidos,
+        )
+        resultado = wb.save(EXCEL_PATH)
+        if not resultado or not resultado.get('Inventario'):
+            raise RuntimeError('Google Sheets no confirmó el ajuste de existencias')
+        return True, f"✅ Existencias de '{nombre}' actualizadas a {nuevo_stock}", resumen
+    finally:
+        if wb is not None:
+            wb.close()
+
+
+def eliminar_producto(producto):
+    """Elimina un producto solo si no tiene ventas históricas asociadas."""
+    nombre = str(producto or '').strip()
+    if not nombre:
+        raise ValueError('El nombre del producto es obligatorio')
+
+    wb = None
+    try:
+        wb = load_workbook_for_app(EXCEL_PATH)
+        ws = wb['Inventario']
+        ws_ventas = wb['Ventas']
+        fila = _fila_inventario(ws, nombre)
+        if fila is None:
+            return False, f"No se encontró el producto '{nombre}'", None
+
+        vendidos = _unidades_vendidas_en_libro(ws_ventas, nombre)
+        if vendidos > 0:
+            return False, (
+                f"No se puede eliminar '{nombre}' porque tiene {vendidos} "
+                'unidades vendidas. Puedes editarlo o ajustar sus existencias.'
+            ), None
+
+        ws.delete_rows(fila, 1)
+        resultado = wb.save(EXCEL_PATH)
+        if not resultado or not resultado.get('Inventario'):
+            raise RuntimeError('Google Sheets no confirmó la eliminación de Inventario')
+        return True, f"✅ Producto '{nombre}' eliminado de Google Sheets", {'producto': nombre}
+    finally:
+        if wb is not None:
+            wb.close()
+
+
 def calcular_inventario_y_clientes(ventas, prods_base):
     inventario = []
     for p in prods_base:
@@ -317,6 +523,13 @@ def calcular_inventario_y_clientes(ventas, prods_base):
     } for cli, v in cli_dict.items()]
 
     return inventario, clientes
+
+
+def _datos_actualizados_neveras():
+    prods = leer_inventario_base()
+    ventas = leer_ventas(prods)
+    inventario, clientes = calcular_inventario_y_clientes(ventas, prods)
+    return ventas, inventario, clientes
 
 
 # ── ESCRITURA ─────────────────────────────────────────────────
@@ -745,6 +958,97 @@ def nuevo_producto():
             'ok': True,
             'mensaje': f"✅ Producto '{producto['producto']}' guardado en Google Sheets",
             'producto': producto,
+        })
+    except Exception as exc:
+        quota_status = google_error_status(exc)
+        if quota_status:
+            return jsonify({
+                'ok': False,
+                'error': 'Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.',
+                'retry_after_seconds': 10,
+            }), quota_status
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+
+@app.route('/api/editar-producto', methods=['POST'])
+def editar_producto_api():
+    data = request.get_json(silent=True) or {}
+    try:
+        ok, mensaje, producto = editar_producto(
+            data.get('productoOriginal'),
+            data.get('producto'),
+            data.get('costo'),
+            data.get('precio'),
+            data.get('stockInicial'),
+            data.get('stockMin'),
+        )
+        if not ok:
+            return jsonify({'ok': False, 'error': mensaje}), 409
+        ventas, inventario, clientes = _datos_actualizados_neveras()
+        return jsonify({
+            'ok': True,
+            'mensaje': mensaje,
+            'producto': producto,
+            'ventas': ventas,
+            'inventario': inventario,
+            'clientes': clientes,
+        })
+    except Exception as exc:
+        quota_status = google_error_status(exc)
+        if quota_status:
+            return jsonify({
+                'ok': False,
+                'error': 'Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.',
+                'retry_after_seconds': 10,
+            }), quota_status
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+
+@app.route('/api/ajustar-existencias', methods=['POST'])
+def ajustar_existencias_api():
+    data = request.get_json(silent=True) or {}
+    try:
+        ok, mensaje, producto = ajustar_existencias(
+            data.get('producto'),
+            data.get('stockActual'),
+        )
+        if not ok:
+            return jsonify({'ok': False, 'error': mensaje}), 409
+        ventas, inventario, clientes = _datos_actualizados_neveras()
+        return jsonify({
+            'ok': True,
+            'mensaje': mensaje,
+            'producto': producto,
+            'ventas': ventas,
+            'inventario': inventario,
+            'clientes': clientes,
+        })
+    except Exception as exc:
+        quota_status = google_error_status(exc)
+        if quota_status:
+            return jsonify({
+                'ok': False,
+                'error': 'Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.',
+                'retry_after_seconds': 10,
+            }), quota_status
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+
+@app.route('/api/eliminar-producto', methods=['POST'])
+def eliminar_producto_api():
+    data = request.get_json(silent=True) or {}
+    try:
+        ok, mensaje, producto = eliminar_producto(data.get('producto'))
+        if not ok:
+            return jsonify({'ok': False, 'error': mensaje}), 409
+        ventas, inventario, clientes = _datos_actualizados_neveras()
+        return jsonify({
+            'ok': True,
+            'mensaje': mensaje,
+            'producto': producto,
+            'ventas': ventas,
+            'inventario': inventario,
+            'clientes': clientes,
         })
     except Exception as exc:
         quota_status = google_error_status(exc)
