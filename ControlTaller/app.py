@@ -50,8 +50,15 @@ def style_header_row(ws, headers):
 
 
 def init_excel():
+    """Crea el XLSX local solo cuando se está ejecutando sin Google Sheets.
+
+    En producción Vercel el sistema de archivos no debe usarse como base de
+    datos; ``load_workbook_for_app`` devuelve entonces un RemoteWorkbook. En
+    modo local, la carpeta ``data`` debe existir antes de llamar a openpyxl.
+    """
     if sheets_enabled() or os.path.exists(EXCEL_FILE):
         return
+    os.makedirs(os.path.dirname(EXCEL_FILE), exist_ok=True)
     wb = Workbook()
     first = True
     for sheet_name, headers in SHEET_HEADERS.items():
@@ -60,6 +67,7 @@ def init_excel():
         style_header_row(ws, headers)
         first = False
     wb.save(EXCEL_FILE)
+    wb.close()
 
 
 def migrate_sheet(wb, sheet_name, target_headers):
@@ -107,9 +115,16 @@ def ensure_sheets(wb):
 
 
 def get_wb():
-    init_excel()
+    """Obtiene el libro a través del adaptador híbrido de almacenamiento.
+
+    No se llama a ``init_excel`` aquí: en modo local el propio adaptador crea
+    la carpeta y el archivo que falten; en modo remoto evita cualquier intento
+    de escritura en el filesystem efímero de Vercel.
+    """
     wb = load_workbook_for_app(EXCEL_FILE)
     if ensure_sheets(wb):
+        # En remoto RemoteWorkbook.save() sincroniza con Google Sheets; en
+        # local openpyxl guarda el archivo XLSX correspondiente.
         wb.save(EXCEL_FILE)
     return wb
 

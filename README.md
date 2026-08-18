@@ -92,9 +92,13 @@ Vercel reconoce una instancia Flask llamada `app` en puntos de entrada como `app
 
 La segunda estrategia permanece disponible de forma automática cuando no existen variables de Google, pero el despliegue de producción debe usar la primera.
 
-## Validación realizada
+## Corrección aplicada y validación
 
-Se han verificado de forma local los siguientes flujos: carga del menú, disponibilidad de los tres módulos, lectura de sus API, descarga del respaldo global XLSX y carga de ese mismo respaldo. La prueba de humo finalizó correctamente con las diez pestañas de datos y las dos pestañas auxiliares de Neveras restauradas en el libro compartido.
+El flujo de Control de Taller ya no intenta crear ni guardar un archivo local antes de pasar por el adaptador híbrido. En modo Google Sheets, `get_wb()` obtiene un `RemoteWorkbook` y cada operación CRUD conserva su llamada normal a `save()`, que sincroniza todas las pestañas con la hoja remota. En modo local, `load_workbook_for_app()` crea la carpeta `data` antes de abrir o guardar el XLSX.
+
+Se verificaron de forma local la carga del menú, la disponibilidad de `/control`, `/neveras` y `/peritaje`, las lecturas de sus API y la descarga/carga del respaldo global. Además, una prueba de integración con un servicio remoto simulado confirmó un alta de mecánico seguida de lectura desde Google Sheets, una venta de Neveras seguida de lectura y marcado de pago, y la lectura de Peritaje. La prueba de humo del respaldo conserva las doce pestañas integradas en una única hoja de cálculo.
+
+Después de subir el contenido de este directorio al repositorio, crea un nuevo deploy en Vercel. Conserva `GOOGLE_SHEETS_ID` y `GOOGLE_SERVICE_ACCOUNT_JSON` en **Production**; si Vercel crea Preview Deployments, repite las mismas variables en **Preview**. Comprueba primero `/api/health` y después realiza una escritura de prueba desde cada módulo, verificando que el registro aparece al recargar la interfaz y en la pestaña correspondiente.
 
 ## Seguridad y mantenimiento
 
