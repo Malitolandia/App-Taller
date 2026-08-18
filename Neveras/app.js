@@ -266,14 +266,14 @@ function toast(msg, err = false) {
 async function checkServidor() {
   try {
     const r = await fetch(API + '/productos', { signal: AbortSignal.timeout(1500), cache: 'no-store' });
-    if (r.ok) {
-      modoServidor = true;
-      $('srv-dot').className = 'srv-dot on';
-      $('srv-txt').textContent = 'En línea';
-      $('srv-txt').style.color = 'var(--ac)';
-      await recargarDesdeServidor();
-    }
-  } catch {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const loaded = await recargarDesdeServidor();
+    if (!loaded) throw new Error('No se pudieron leer los datos remotos');
+    modoServidor = true;
+    $('srv-dot').className = 'srv-dot on';
+    $('srv-txt').textContent = 'En línea';
+    $('srv-txt').style.color = 'var(--ac)';
+  } catch (err) {
     modoServidor = false;
     $('srv-dot').className = 'srv-dot';
     $('srv-txt').textContent = 'Sin servidor';
@@ -284,13 +284,14 @@ async function checkServidor() {
 async function recargarDesdeServidor() {
   try {
     const r    = await fetch(API + '/datos', { cache: 'no-store' });
-    const data = await r.json();
-    if (data.error) return;
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.error || !Array.isArray(data.ventas) || !Array.isArray(data.inventario) || !Array.isArray(data.clientes)) return false;
     D.ventas     = data.ventas;
     D.inventario = data.inventario;
     D.clientes   = data.clientes;
     renderAll();
-  } catch { /* silencioso */ }
+    return true;
+  } catch { return false; }
 }
 
 // ── MODAL NUEVA VENTA ─────────────────────────────────────────
@@ -433,7 +434,7 @@ async function guardarVenta() {
         toast('Error: ' + data.error, true);
       }
     } catch { toast('No se pudo conectar al servidor', true); }
-    btn.textContent = '💾 Guardar en Excel'; btn.disabled = false;
+    btn.textContent = '💾 Guardar en la nube'; btn.disabled = false;
   } else {
     // Modo offline: solo en memoria (una fila por producto)
     let num    = Math.max(0, ...D.ventas.map(v => v.num));

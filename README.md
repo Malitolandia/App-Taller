@@ -23,7 +23,7 @@ Las entidades se mantienen en una sola hoja de cálculo de Google Sheets, organi
 | Módulo | Pestañas gestionadas |
 | --- | --- |
 | Control de Taller | `Mecanicos`, `Equipos`, `Trabajos`, `Gastos`, `Pagos`, `Herramientas` |
-| Neveras | `Inventario`, `Ventas`, `Clientes` |
+| Neveras | `Inventario`, `Ventas`, `Clientes` (datos); `Dashboard` y `Deudas` (auxiliares de la plantilla) |
 | Peritaje | `Peritajes` |
 
 La cuenta de servicio debe tener acceso de **editor** solamente a esa hoja. Este diseño evita que los datos dependan del sistema de archivos efímero de una función de Vercel y permite consultar o editar la información desde Google Sheets cuando sea necesario.
@@ -94,7 +94,7 @@ La segunda estrategia permanece disponible de forma automática cuando no existe
 
 ## Validación realizada
 
-Se han verificado de forma local los siguientes flujos: carga del menú, disponibilidad de los tres módulos, lectura de sus API, descarga del respaldo global XLSX y carga de ese mismo respaldo. La prueba de humo finalizó correctamente con las diez pestañas de datos restauradas.
+Se han verificado de forma local los siguientes flujos: carga del menú, disponibilidad de los tres módulos, lectura de sus API, descarga del respaldo global XLSX y carga de ese mismo respaldo. La prueba de humo finalizó correctamente con las diez pestañas de datos y las dos pestañas auxiliares de Neveras restauradas en el libro compartido.
 
 ## Seguridad y mantenimiento
 

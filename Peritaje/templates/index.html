@@ -368,12 +368,14 @@ async function guardarPeritaje() {
   const res = await fetch(APP_BASE + '/api/peritaje', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
   });
-  const r = await res.json();
-  if (r.success) {
-    showToast(`✅ Guardado: ${r.num_peritaje}`);
-    document.getElementById('num_ot').value = r.num_peritaje;
-    loadHistorial();
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok || !r.success) {
+    showToast(`❌ ${r.error || `Error al guardar (${res.status})`}`, true);
+    return null;
   }
+  showToast(`✅ Guardado: ${r.num_peritaje}`);
+  document.getElementById('num_ot').value = r.num_peritaje;
+  loadHistorial();
   return r.num_peritaje;
 }
 

@@ -123,7 +123,6 @@
 </head>
 <body>
 <script>const APP_BASE = "{{ request.script_root }}";</script>
-<script>const APP_BASE = "{{ request.script_root }}";</script>
 
 <nav>
   <div class="brand">
@@ -437,11 +436,13 @@ async function cargarMecanicos() {
 async function crearMecanico() {
   const nombre = document.getElementById('mecNombre').value.trim();
   if (!nombre) { showToast('Escribe el nombre del mecánico', true); return; }
-  await fetch(APP_BASE + '/api/mecanicos', { method: 'POST', headers: {'Content-Type':'application/json'},
+  const res = await fetch(APP_BASE + '/api/mecanicos', { method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       nombre, telefono: document.getElementById('mecTelefono').value,
       comision: document.getElementById('mecComision').value || {{ comision_default }},
     }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al guardar (${res.status})`, true); return; }
   document.getElementById('mecNombre').value = '';
   document.getElementById('mecTelefono').value = '';
   document.getElementById('mecComision').value = {{ comision_default }};
@@ -616,7 +617,9 @@ async function crearTrabajo() {
     payload.mecanico = mecanico;
   }
 
-  await fetch(APP_BASE + '/api/trabajo', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const res = await fetch(APP_BASE + '/api/trabajo', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al guardar (${res.status})`, true); return; }
   ['trPlaca','trVehiculo','trMonto','trDescripcion'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('trFacturaCancelada').checked = false;
   document.getElementById('trPreview').innerHTML = '';
@@ -685,7 +688,8 @@ async function pagarNomina(mecanico) {
   if (!confirm(`¿Confirmar pago de nómina de ${mecanico} para la semana ${semana}?`)) return;
   const res = await fetch(APP_BASE + '/api/nomina/pagar', { method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ mecanico, semana }) });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar el pago (${res.status})`, true); return; }
   showToast(`Pago registrado: ${fmt(data.total_comision)}`);
   cargarNomina(); cargarTrabajos();
 }
@@ -794,7 +798,9 @@ document.addEventListener('click', function(e) {
 });
 
 async function marcarFacturaCancelada(id) {
-  await fetch(`${APP_BASE}/api/trabajo/${id}/factura`, { method: 'POST' });
+  const res = await fetch(`${APP_BASE}/api/trabajo/${id}/factura`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al actualizar (${res.status})`, true); return; }
   showToast('Factura marcada como cancelada');
   cargarNomina(); cargarTrabajos();
 }
@@ -818,13 +824,15 @@ async function crearGasto() {
     categoria = document.getElementById('gCategoriaCustom').value.trim();
     if (!categoria) { showToast('Escribe el nombre de la nueva categoría', true); return; }
   }
-  await fetch(APP_BASE + '/api/gasto', { method: 'POST', headers: {'Content-Type':'application/json'},
+  const res = await fetch(APP_BASE + '/api/gasto', { method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       fecha: document.getElementById('gFecha').value || todayStr(),
       categoria, descripcion: document.getElementById('gDescripcion').value,
       monto, responsable: document.getElementById('gResponsable').value,
       metodo_pago: document.getElementById('gMetodo').value,
     }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al guardar (${res.status})`, true); return; }
   ['gMonto','gDescripcion','gResponsable','gCategoriaCustom'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('gCategoriaCustomWrap').style.display = 'none';
   document.getElementById('gCategoria').value = '{{ categorias[0] }}';
@@ -902,13 +910,15 @@ async function crearHerramienta() {
     prestadaA = prompt('Nombre de la persona a la que se le presta:') || '';
     if (!prestadaA.trim()) { showToast('Debes indicar a quién se presta', true); return; }
   }
-  await fetch(APP_BASE + '/api/herramienta', { method: 'POST', headers: {'Content-Type':'application/json'},
+  const res = await fetch(APP_BASE + '/api/herramienta', { method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       herramienta: nombre, prestada_a: prestadaA,
       entregada_por: document.getElementById('herEntregadaPor').value,
       fecha_prestamo: document.getElementById('herFecha').value || todayStr(),
       observaciones: document.getElementById('herObservaciones').value,
     }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al guardar (${res.status})`, true); return; }
   ['herNombre','herEntregadaPor','herObservaciones'].forEach(id => document.getElementById(id).value = '');
   showToast('Préstamo registrado');
   cargarHerramientas();
