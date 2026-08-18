@@ -391,6 +391,23 @@ function showToast(msg, isError) {
   setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+// Deduplica únicamente solicitudes GET que ocurren al mismo tiempo durante el
+// arranque. La entrada expira enseguida y no sustituye la lectura confirmada
+// después de una escritura.
+const pendingReads = new Map();
+function readJSON(url) {
+  if (pendingReads.has(url)) return pendingReads.get(url);
+  const promise = fetch(url, { cache: 'no-store' }).then(async res => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }).finally(() => {
+    setTimeout(() => pendingReads.delete(url), 250);
+  });
+  pendingReads.set(url, promise);
+  return promise;
+}
+
 // ---------- Tabs ----------
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -408,8 +425,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 // ---------- Mecánicos ----------
 async function cargarMecanicos() {
-  const res = await fetch(APP_BASE + '/api/mecanicos');
-  mecanicos = await res.json();
+  mecanicos = await readJSON(APP_BASE + '/api/mecanicos');
   const wrap = document.getElementById('mecCards');
   if (!mecanicos.length) { wrap.innerHTML = '<p class="hint">Aún no hay mecánicos registrados.</p>'; return; }
   wrap.innerHTML = mecanicos.map(m => `
@@ -463,8 +479,7 @@ async function eliminarMecanico(id) {
 }
 
 async function cargarMecanicosSelect() {
-  const res = await fetch(APP_BASE + '/api/mecanicos');
-  mecanicos = await res.json();
+  mecanicos = await readJSON(APP_BASE + '/api/mecanicos');
   const activos = mecanicos.filter(m => m['Activo'] !== 'No');
   const sel = document.getElementById('trMecanico');
   sel.innerHTML = activos.map(m => `<option value="${m['Nombre']}" data-pct="${m['% Comisión']}">${m['Nombre']}</option>`).join('');
@@ -480,8 +495,7 @@ async function cargarMecanicosSelect() {
 
 // ---------- Equipos ----------
 async function cargarEquipos() {
-  const res = await fetch(APP_BASE + '/api/equipos');
-  equipos = await res.json();
+  equipos = await readJSON(APP_BASE + '/api/equipos');
   const wrap = document.getElementById('eqCards');
   if (!equipos.length) { wrap.innerHTML = '<p class="hint">Aún no hay equipos creados.</p>'; return; }
   wrap.innerHTML = equipos.map(e => `
@@ -538,8 +552,7 @@ function cargarMecanicosParaEquipo() {
 }
 
 async function cargarEquiposSelect() {
-  const res = await fetch(APP_BASE + '/api/equipos');
-  equipos = await res.json();
+  equipos = await readJSON(APP_BASE + '/api/equipos');
   const activos = equipos.filter(e => e['Activo'] !== 'No');
   const sel = document.getElementById('trEquipo');
   sel.innerHTML = activos.map(e => `<option value="${e['ID']}" data-pct="${e['% Comisión Total']}" data-nombre="${e['Nombre']}">${e['Nombre']}</option>`).join('');
@@ -866,8 +879,7 @@ async function eliminarGasto(id) {
 
 // ---------- Resumen ----------
 async function cargarResumen() {
-  const res = await fetch(APP_BASE + '/api/gastos/resumen?fecha=' + todayStr());
-  const data = await res.json();
+  const data = await readJSON(APP_BASE + '/api/gastos/resumen?fecha=' + todayStr());
   document.getElementById('kpiGastosHoy').textContent = fmt(data.total_hoy);
   document.getElementById('kpiGastosMes').textContent = fmt(data.total_mes);
 
@@ -876,20 +888,17 @@ async function cargarResumen() {
   if (!cats.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Sin gastos hoy</td></tr>'; }
   else { tbody.innerHTML = cats.map(([c, v]) => `<tr><td>${c}</td><td>${fmt(v)}</td></tr>`).join(''); }
 
-  const resNom = await fetch(APP_BASE + '/api/nomina/resumen');
-  const nomData = await resNom.json();
+  const nomData = await readJSON(APP_BASE + '/api/nomina/resumen');
   const pendiente = nomData.resumen.reduce((s, r) => s + r.pendiente, 0);
   document.getElementById('kpiNominaPend').textContent = fmt(pendiente);
 
-  const resMec = await fetch(APP_BASE + '/api/mecanicos');
-  const mecs = await resMec.json();
+  const mecs = await readJSON(APP_BASE + '/api/mecanicos');
   document.getElementById('kpiMecActivos').textContent = mecs.filter(m => m['Activo'] !== 'No').length;
 }
 
 // ---------- Herramientas ----------
 async function cargarHerramientasSelectMec() {
-  const res = await fetch(APP_BASE + '/api/mecanicos');
-  const mecs = await res.json();
+  const mecs = await readJSON(APP_BASE + '/api/mecanicos');
   const sel = document.getElementById('herPrestadaA');
   const activos = mecs.filter(m => m['Activo'] !== 'No');
   sel.innerHTML = activos.map(m => `<option value="${m['Nombre']}">${m['Nombre']}</option>`).join('')

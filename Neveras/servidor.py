@@ -8,7 +8,7 @@ from flask_cors import CORS
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from copy import copy
-from storage import load_workbook_for_app, workbook_to_bytes
+from storage import load_workbook_for_app, workbook_to_bytes, google_error_status
 from datetime import datetime
 import os
 
@@ -20,6 +20,13 @@ def api_error(error):
     if isinstance(error, HTTPException):
         return error
     app.logger.exception("Error no controlado en Neveras")
+    quota_status = google_error_status(error)
+    if quota_status:
+        return jsonify({
+            "ok": False,
+            "error": "Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.",
+            "retry_after_seconds": 10,
+        }), quota_status
     return jsonify({"ok": False, "error": f"{type(error).__name__}: {error}"}), 500
 
 # Solo se conserva el directorio de recursos de la interfaz. Los datos viven

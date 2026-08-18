@@ -101,3 +101,20 @@ Descarga primero el backup actual en `/api/db/export`. Para restaurar, usa la op
 ## 8. Checklist final
 
 Antes de considerar terminado el despliegue, confirma que el dominio abre el menú, `/api/health` devuelve `ok: true`, las doce pestañas existen, una escritura de cada módulo aparece en Google Sheets después de recargar, el respaldo se descarga y el repositorio no contiene secretos ni bases locales.
+
+
+## 9. Nota importante sobre el límite 429
+
+Google Sheets aplica una cuota de lecturas por ventana temporal. La versión actual excluye `Hoja 1`, agrupa las lecturas, evita el polling de Neveras y reutiliza una instantánea confirmada. Aun así, después de un 429 existente conviene esperar unos segundos antes de repetir la prueba.
+
+Tras el redeploy, verifica en este orden:
+
+1. Abre `/api/health` una sola vez.
+2. Si responde `503` indicando cuota temporal, espera y no recargues repetidamente.
+3. Cuando responda `200` con `ok: true`, abre un solo módulo.
+4. Ejecuta una sola carga de respaldo y espera la confirmación.
+5. Comprueba el resultado en la pestaña correspondiente de Google Sheets.
+
+Un `503` con `retry_after_seconds` indica una limitación temporal de Google, no una pérdida de datos. Un `500` distinto debe revisarse con el JSON devuelto por el endpoint; el backend ya devuelve el tipo de excepción y el mensaje para facilitar el diagnóstico.
+
+La versión actual no requiere ningún archivo XLSX local, carpeta `data/`, servidor independiente ni credencial guardada en disco. Solo necesita `GOOGLE_SHEETS_ID` y `GOOGLE_SERVICE_ACCOUNT_JSON` en Vercel, y la cuenta de servicio debe tener permiso de Editor sobre la hoja.

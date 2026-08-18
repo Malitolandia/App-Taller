@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request, send_file
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
-from storage import export_workbook_bytes, import_full_workbook_stream, storage_status
+from storage import export_workbook_bytes, import_full_workbook_stream, storage_status, google_error_status
 
 ROOT = Path(__file__).resolve().parent
 
@@ -45,6 +45,13 @@ def root_error(error):
     if isinstance(error, HTTPException):
         return error
     app.logger.exception("Error no controlado en la aplicación raíz")
+    quota_status = google_error_status(error)
+    if quota_status:
+        return jsonify({
+            "success": False,
+            "error": "Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.",
+            "retry_after_seconds": 10,
+        }), quota_status
     return jsonify({
         "success": False,
         "error": f"{type(error).__name__}: {error}",
@@ -77,6 +84,13 @@ def import_database():
         return jsonify({"success": True, "imported_sheets": imported})
     except Exception as exc:
         app.logger.exception("Error al importar respaldo")
+        quota_status = google_error_status(exc)
+        if quota_status:
+            return jsonify({
+                "success": False,
+                "error": "Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.",
+                "retry_after_seconds": 10,
+            }), quota_status
         return jsonify({"success": False, "error": str(exc)}), 400
 
 app.wsgi_app = DispatcherMiddleware(

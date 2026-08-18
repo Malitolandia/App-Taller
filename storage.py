@@ -10,6 +10,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import random
+import threading
+import time
 from datetime import date, datetime
 from functools import lru_cache
 from typing import BinaryIO, Iterable
@@ -123,8 +126,44 @@ def _title_range(title: str) -> str:
     return _quote_title(title)
 
 
-def _sheet_properties() -> list[dict]:
-    response = (
+def google_error_status(error) -> int | None:
+    """Mapea límites temporales de Google Sheets a una respuesta HTTP recuperable."""
+    response = getattr(error, "resp", None)
+    status = getattr(response, "status", None)
+    text = str(error).upper()
+    if status == 429 or "RATE_LIMIT_EXCEEDED" in text or "QUOTA EXCEEDED" in text:
+        return 503
+    return None
+
+
+def _execute(request, retries: int = 3):
+    """Ejecuta una llamada Google con backoff para 429/5xx."""
+    for attempt in range(retries + 1):
+        try:
+            try:
+                return request.execute(num_retries=0)
+            except TypeError:
+                return request.execute()
+        except Exception as exc:
+            response = getattr(exc, "resp", None)
+            status = getattr(response, "status", None)
+            if status not in {429, 500, 502, 503, 504} or attempt >= retries:
+                raise
+            delay = min(8.0, 0.75 * (2 ** attempt) + random.random() * 0.25)
+            time.sleep(delay)
+    raise RuntimeError("La llamada a Google Sheets no pudo completarse")
+
+
+_PROPERTIES_CACHE: tuple[float, list[dict]] | None = None
+_PROPERTIES_TTL_SECONDS = 20.0
+
+
+def _sheet_properties(force_refresh: bool = False) -> list[dict]:
+    global _PROPERTIES_CACHE
+    now = time.monotonic()
+    if not force_refresh and _PROPERTIES_CACHE and now - _PROPERTIES_CACHE[0] < _PROPERTIES_TTL_SECONDS:
+        return [dict(item) for item in _PROPERTIES_CACHE[1]]
+    response = _execute(
         _sheets_service()
         .spreadsheets()
         .get(
@@ -132,12 +171,14 @@ def _sheet_properties() -> list[dict]:
             includeGridData=False,
             fields="sheets.properties",
         )
-        .execute()
     )
-    return [sheet["properties"] for sheet in response.get("sheets", [])]
+    properties = [sheet["properties"] for sheet in response.get("sheets", [])]
+    _PROPERTIES_CACHE = (now, properties)
+    return [dict(item) for item in properties]
 
 
 _SCHEMA_READY = False
+_SCHEMA_LOCK = threading.Lock()
 
 
 def _grid_requests(properties: list[dict]) -> list[dict]:
@@ -176,7 +217,7 @@ def _ensure_required_sheets() -> None:
     existing = {item["title"] for item in properties}
     missing = [title for title in REMOTE_HEADERS if title not in existing]
     if missing:
-        service.spreadsheets().batchUpdate(
+        _execute(service.spreadsheets().batchUpdate(
             spreadsheetId=_spreadsheet_id(),
             body={
                 "requests": [
@@ -194,19 +235,19 @@ def _ensure_required_sheets() -> None:
                     for title in missing
                 ]
             },
-        ).execute()
-        properties = _sheet_properties()
+        ))
+        properties = _sheet_properties(force_refresh=True)
 
     grid_requests = _grid_requests(properties)
     if grid_requests:
-        service.spreadsheets().batchUpdate(
+        _execute(service.spreadsheets().batchUpdate(
             spreadsheetId=_spreadsheet_id(),
             body={"requests": grid_requests},
-        ).execute()
+        ))
 
     values_api = service.spreadsheets().values()
     titles = list(REMOTE_HEADERS)
-    header_response = values_api.batchGet(
+    header_response = _execute(values_api.batchGet(
         spreadsheetId=_spreadsheet_id(),
         ranges=[
             f"{_quote_title(title)}!A1:{get_column_letter(max(len(REMOTE_HEADERS[title]), 1))}1"
@@ -214,57 +255,89 @@ def _ensure_required_sheets() -> None:
         ],
         valueRenderOption="UNFORMATTED_VALUE",
         dateTimeRenderOption="FORMATTED_STRING",
-    ).execute()
+    ))
     value_ranges = header_response.get("valueRanges", [])
     for index, (title, headers) in enumerate(REMOTE_HEADERS.items()):
         value_range = value_ranges[index] if index < len(value_ranges) else {}
         first_row = value_range.get("values", [])
         populated = bool(first_row and any(value not in (None, "") for value in first_row[0]))
         if not populated:
-            response = values_api.update(
+            response = _execute(values_api.update(
                 spreadsheetId=_spreadsheet_id(),
                 range=f"{_quote_title(title)}!A1",
                 valueInputOption="RAW",
                 body={"values": [headers]},
-            ).execute()
+            ))
             if not response.get("updatedRange"):
                 raise RuntimeError(f"Google Sheets no confirmó los encabezados de '{title}'")
 
 
 def _prepare_remote_schema() -> None:
     global _SCHEMA_READY
-    if not _SCHEMA_READY:
+    if _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return
         _ensure_required_sheets()
         _SCHEMA_READY = True
 
 
-def _remote_workbook() -> Workbook:
-    _prepare_remote_schema()
-    service = _sheets_service()
+_VALUES_CACHE: tuple[float, dict[str, list[list]]] | None = None
+_VALUES_TTL_SECONDS = 10.0
+
+
+def _invalidate_values_cache() -> None:
+    global _VALUES_CACHE
+    _VALUES_CACHE = None
+
+
+def _workbook_from_values(values_by_title: dict[str, list[list]]) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
-
-    properties = _sheet_properties()
-    titles = [props["title"] for props in properties]
-    ranges = [_title_range(title) for title in titles]
-    response = service.spreadsheets().values().batchGet(
-        spreadsheetId=_spreadsheet_id(),
-        ranges=ranges,
-        valueRenderOption="UNFORMATTED_VALUE",
-        dateTimeRenderOption="FORMATTED_STRING",
-    ).execute()
-    value_ranges = response.get("valueRanges", [])
-    for index, title in enumerate(titles):
-        value_range = value_ranges[index] if index < len(value_ranges) else {}
+    for title, values in values_by_title.items():
         worksheet = workbook.create_sheet(title)
-        values = value_range.get("values", [])
         for row_index, row_values in enumerate(values, start=1):
             for col_index, value in enumerate(row_values, start=1):
                 worksheet.cell(row=row_index, column=col_index, value=value)
-
     if not workbook.sheetnames:
-        raise RuntimeError("La hoja de cálculo no contiene ninguna pestaña utilizable")
+        raise RuntimeError("Google Sheets no contiene las pestañas requeridas")
     return workbook
+
+
+def _remote_workbook(force_refresh: bool = False) -> Workbook:
+    global _VALUES_CACHE
+    _prepare_remote_schema()
+    now = time.monotonic()
+    if not force_refresh and _VALUES_CACHE and now - _VALUES_CACHE[0] < _VALUES_TTL_SECONDS:
+        return _workbook_from_values(_VALUES_CACHE[1])
+
+    service = _sheets_service()
+    properties = _sheet_properties()
+    available = {props["title"] for props in properties}
+    # Nunca leer pestañas ajenas o la pestaña predeterminada `Hoja 1`.
+    titles = [title for title in REMOTE_HEADERS if title in available]
+    if not titles:
+        raise RuntimeError("Google Sheets no contiene las pestañas requeridas")
+    try:
+        response = _execute(service.spreadsheets().values().batchGet(
+            spreadsheetId=_spreadsheet_id(),
+            ranges=[_title_range(title) for title in titles],
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING",
+        ))
+    except Exception as exc:
+        response_meta = getattr(exc, "resp", None)
+        if getattr(response_meta, "status", None) == 429 and _VALUES_CACHE:
+            return _workbook_from_values(_VALUES_CACHE[1])
+        raise
+    value_ranges = response.get("valueRanges", [])
+    values_by_title: dict[str, list[list]] = {}
+    for index, title in enumerate(titles):
+        value_range = value_ranges[index] if index < len(value_ranges) else {}
+        values_by_title[title] = value_range.get("values", [])
+    _VALUES_CACHE = (now, values_by_title)
+    return _workbook_from_values(values_by_title)
 
 
 def _json_value(value):
@@ -302,19 +375,20 @@ def _sync_one_sheet(title: str, values: list[list], previous: list[list] | None)
         return {"rows": len(values), "cells": sum(len(row) for row in values)}
 
     if not values:
-        api.clear(
+        _execute(api.clear(
             spreadsheetId=spreadsheet_id,
             range=_title_range(title),
             body={},
-        ).execute()
+        ))
+        _invalidate_values_cache()
         return {"rows": 0, "cells": 0}
 
-    response = api.update(
+    response = _execute(api.update(
         spreadsheetId=spreadsheet_id,
         range=f"{_quote_title(title)}!A1",
         valueInputOption="RAW",
         body={"values": values},
-    ).execute()
+    ))
 
     # Primero se actualizan los datos nuevos. Si una limpieza posterior falla,
     # los datos recién registrados ya quedan persistidos en Google Sheets.
@@ -325,22 +399,23 @@ def _sync_one_sheet(title: str, values: list[list], previous: list[list] | None)
     max_rows = max(old_rows, new_rows, 1)
     max_cols = max(old_cols, new_cols, 1)
     if old_rows > new_rows:
-        api.clear(
+        _execute(api.clear(
             spreadsheetId=spreadsheet_id,
             range=(f"{_quote_title(title)}!A{new_rows + 1}:"
                    f"{get_column_letter(max_cols)}{max_rows}"),
             body={},
-        ).execute()
+        ))
     if old_cols > new_cols:
-        api.clear(
+        _execute(api.clear(
             spreadsheetId=spreadsheet_id,
             range=(f"{_quote_title(title)}!{get_column_letter(new_cols + 1)}1:"
                    f"{get_column_letter(old_cols)}{max_rows}"),
             body={},
-        ).execute()
+        ))
 
     if not response.get("updatedRange"):
         raise RuntimeError(f"Google Sheets no confirmó la actualización de '{title}'")
+    _invalidate_values_cache()
     return {
         "rows": int(response.get("updatedRows", new_rows)),
         "cells": int(response.get("updatedCells", sum(len(row) for row in values))),
@@ -388,7 +463,7 @@ def save_workbook_to_sheets(
     for title in workbook.sheetnames:
         current = _trimmed_values(workbook[title])
         if title not in existing:
-            _sheets_service().spreadsheets().batchUpdate(
+            _execute(_sheets_service().spreadsheets().batchUpdate(
                 spreadsheetId=_spreadsheet_id(),
                 body={
                     "requests": [{
@@ -403,10 +478,12 @@ def save_workbook_to_sheets(
                         }
                     }],
                 },
-            ).execute()
+            ))
             existing.add(title)
         previous = original.get(title) if original else None
         results[title] = _sync_one_sheet(title, current, previous)
+    global _VALUES_CACHE
+    _VALUES_CACHE = (time.monotonic(), _snapshot(workbook))
     return results
 
 
@@ -448,7 +525,7 @@ def import_full_workbook_stream(
     sheet_owners: dict[str, str],
 ) -> list[str]:
     incoming = load_workbook(io.BytesIO(stream.read()), data_only=True)
-    current = RemoteWorkbook(_remote_workbook())
+    current = RemoteWorkbook(_remote_workbook(force_refresh=True))
     try:
         _replace_workbook_contents(current._workbook, incoming)
         result = current.save()
@@ -464,7 +541,7 @@ def import_workbook_stream(
     allowed_sheets: Iterable[str] | None = None,
 ) -> list[str]:
     incoming = load_workbook(io.BytesIO(stream.read()), data_only=True)
-    current = RemoteWorkbook(_remote_workbook())
+    current = RemoteWorkbook(_remote_workbook(force_refresh=True))
     try:
         allowed = set(allowed_sheets) if allowed_sheets else set(incoming.sheetnames)
         for title in list(incoming.sheetnames):

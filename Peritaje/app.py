@@ -5,7 +5,7 @@ from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
 from openpyxl.utils import get_column_letter
-from storage import load_workbook_for_app, workbook_to_bytes
+from storage import load_workbook_for_app, workbook_to_bytes, google_error_status
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm, mm
@@ -25,6 +25,13 @@ def api_error(error):
     if isinstance(error, HTTPException):
         return error
     app.logger.exception("Error no controlado en Peritaje")
+    quota_status = google_error_status(error)
+    if quota_status:
+        return jsonify({
+            "success": False,
+            "error": "Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.",
+            "retry_after_seconds": 10,
+        }), quota_status
     return jsonify({"success": False, "error": f"{type(error).__name__}: {error}"}), 500
 
 EXCEL_FILE = "google-sheets://Peritajes"

@@ -264,8 +264,7 @@ function toast(msg, err = false) {
 
 async function checkServidor() {
   try {
-    const r = await fetch(API + '/productos', { signal: AbortSignal.timeout(1500), cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    // /datos ya devuelve inventario, ventas y clientes en una sola lectura lógica.
     const loaded = await recargarDesdeServidor();
     if (!loaded) throw new Error('No se pudieron leer los datos remotos');
     remoteReady = true;
@@ -356,25 +355,17 @@ async function abrirModal() {
   itemsVenta = [{ producto: '', cantidad: 1, precio: 0, ganUnit: 0 }];
   renderItems();
 
-  // Clientes desde la pestaña remota Clientes, columna A desde la fila 2.
+  // La lista de clientes ya viene en /datos; no hacemos otra lectura al abrir el modal.
   const dl = $('lista-clientes');
   dl.innerHTML = '';
-  try {
-    if (remoteReady) {
-      const r       = await fetch(API + '/lista-clientes', { cache: 'no-store' });
-      const nombres = await r.json();
-      if (Array.isArray(nombres)) {
-        nombres.forEach(nombre => {
-          const opt = document.createElement('option');
-          opt.value = nombre;
-          dl.appendChild(opt);
-        });
-      }
-    } else {
-      throw new Error('Google Sheets no está disponible');
-    }
-  } catch (err) {
-    toast('No se pudieron cargar los clientes: ' + err.message, true);
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible', true);
+  } else {
+    (Array.isArray(D.clientes) ? D.clientes : []).forEach(cliente => {
+      const opt = document.createElement('option');
+      opt.value = cliente.cliente || '';
+      dl.appendChild(opt);
+    });
   }
 
   $('m-cliente').value = '';
@@ -458,5 +449,6 @@ $('fhoy').textContent = new Date().toLocaleDateString('es-CO', {
 });
 
 renderAll();
+// Una sola lectura inicial. Las escrituras actualizan la interfaz con la respuesta
+// confirmada por Google Sheets; no se consulta la hoja mediante polling.
 checkServidor();
-setInterval(checkServidor, 10000);
