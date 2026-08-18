@@ -1,109 +1,169 @@
-# APPTALLER · Vene Autos
+# Cotizador de Repuestos — HTML/CSS/JS + Vercel Functions + Google Sheets
 
-APPTALLER consolida los módulos de **Control de Taller**, **Control de Neveras** y **Peritaje Vehicular** en una única aplicación Flask apta para desplegarse en Vercel. El proyecto conserva los libros Excel como respaldo local de desarrollo, pero al configurar Google Sheets pasa a utilizar una única hoja de cálculo remota como almacenamiento compartido y persistente.
+Frontend 100% estático (HTML, CSS y JavaScript puro, sin frameworks ni build
+step) + backend con **Vercel Serverless Functions** (Node.js) en `/api`, que
+hablan con Google Sheets vía una Service Account. No hay base de datos.
 
-> La aplicación no incluye ninguna clave en el repositorio. La comunicación con Google se activa únicamente al configurar variables de entorno en el despliegue.
+## Estructura
 
-## Funcionalidades incluidas
+```
+public/                    Todo lo que ve el navegador (estático)
+  index.html                Landing
+  admin-login.html           Login del admin
+  admin.html                 Panel: crear cotización + listado
+  editar.html                Editar título/repuestos de una cotización
+  cotizar.html               Página pública del proveedor (?uuid=...)
+  results.html               Comparativo, ganador por repuesto, exportar, WhatsApp (?uuid=...)
+  buscar.html                Buscador histórico de repuestos
+  proveedores.html           Historial de desempeño por proveedor
+  css/styles.css
+  js/login.js, admin.js, editar.js, cotizar.js, results.js, buscar.js, proveedores.js
 
-| Área | Implementación |
-| --- | --- |
-| Navegación | Menú central con rutas `/control`, `/neveras` y `/peritaje` en el mismo dominio. |
-| Persistencia | Adaptador híbrido: Google Sheets en producción cuando hay credenciales y XLSX local como modo de desarrollo/contingencia. |
-| Datos iniciales | En la primera conexión a una hoja vacía, las pestañas de los tres Excel incluidos se cargan como semilla sin sobrescribir pestañas remotas ya existentes. |
-| Respaldo global | La pantalla de inicio permite descargar `APPTALLER_respaldo.xlsx` con las pestañas de todos los módulos. |
-| Restauración global | La pantalla de inicio permite subir un `.xlsx` o `.xlsm`; las pestañas presentes se restauran en la base remota o local. |
-| Respaldo por módulo | Control de Taller, Neveras y Peritaje conservan su descarga individual de Excel. |
-| Vercel | Punto de entrada `app.py`, dependencias en `requirements.txt` y configuración de función en `vercel.json`. |
-
-## Arquitectura de datos
-
-Las entidades se mantienen en una sola hoja de cálculo de Google Sheets, organizada por pestañas. La aplicación trata la primera fila de cada pestaña como encabezados, de forma compatible con los libros existentes.
-
-| Módulo | Pestañas gestionadas |
-| --- | --- |
-| Control de Taller | `Mecanicos`, `Equipos`, `Trabajos`, `Gastos`, `Pagos`, `Herramientas` |
-| Neveras | `Inventario`, `Ventas`, `Clientes` |
-| Peritaje | `Peritajes` |
-
-La cuenta de servicio debe tener acceso de **editor** solamente a esa hoja. Este diseño evita que los datos dependan del sistema de archivos efímero de una función de Vercel y permite consultar o editar la información desde Google Sheets cuando sea necesario.
-
-## Configurar Google Sheets
-
-La implementación usa una cuenta de servicio, que es la opción apropiada para un backend desplegado porque no requiere que un usuario inicie sesión para cada petición. Google documenta la habilitación de Sheets API y el uso de bibliotecas cliente para aplicaciones Python.[1]
-
-| Paso | Acción necesaria |
-| --- | --- |
-| 1 | Crea una hoja de cálculo en Google Drive, por ejemplo `APPTALLER - Base de datos`. Copia el identificador de la URL situada entre `/d/` y `/edit`. |
-| 2 | En Google Cloud Console crea o selecciona un proyecto, habilita **Google Sheets API** y crea una cuenta de servicio con una clave JSON. |
-| 3 | Abre el archivo JSON, identifica el valor `client_email` y comparte la hoja de cálculo con ese correo como **Editor**. |
-| 4 | Conserva el JSON fuera de GitHub. En Vercel crearás las variables descritas a continuación. |
-
-Configura estas variables en los entornos **Production**, **Preview** y, si lo deseas, **Development** de Vercel. Las variables de entorno son valores externos al código que pueden diferir por entorno.[2]
-
-| Variable | Valor |
-| --- | --- |
-| `GOOGLE_SHEETS_ID` | El identificador de la hoja creada en Google Drive. |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | El contenido completo y válido, en una sola línea, del archivo JSON de la cuenta de servicio. |
-
-Para probar con el archivo de credenciales solamente en tu computador, exporta sus valores antes de iniciar Flask. El archivo de clave no debe estar dentro del repositorio.
-
-```bash
-cd "APP TALLER"
-export GOOGLE_SHEETS_ID="ID_DE_TU_HOJA"
-export GOOGLE_SERVICE_ACCOUNT_FILE="/ruta/segura/google-service-account.json"
-python3 app.py
+api/                        Backend (cada archivo = 1 función serverless)
+  _lib/sheets.js              Auth + CRUD genérico sobre Google Sheets
+  _lib/auth.js                Cookie de sesión admin (sha256 de ADMIN_PASSWORD)
+  _lib/notify.js               Notificación por correo opcional (Resend)
+  login.js / logout.js / session.js
+  quotes.js                   GET listar (admin) / POST crear (admin)
+  quote.js                    GET cotización + repuestos (público, ?uuid=)
+  quote-edit.js                GET/POST editar título y repuestos (admin, ?uuid=)
+  quote-status.js             POST cerrar/reabrir (admin)
+  suppliers.js                POST registrar proveedor (público, valida teléfono duplicado)
+  bids.js                     POST enviar precios (público) + dispara notificación opcional
+  results.js                  GET comparativo completo, cantidades y ganadores (admin, ?uuid=)
+  set-winner.js                POST marcar/quitar ganador de un repuesto (admin)
+  part-catalog.js               GET nombres históricos de repuestos, para autocompletar (admin)
+  search-parts.js               GET buscador histórico de repuestos (admin)
+  supplier-stats.js             GET historial de desempeño por proveedor (admin)
 ```
 
-Al abrir la aplicación por primera vez con una hoja nueva, se crearán y cargarán las pestañas de datos existentes. En los siguientes arranques se preservará el contenido remoto.
+## Funcionalidades
 
-## Ejecución local
+- Crear cotizaciones con **cantidad por repuesto** (el comparativo calcula precio × cantidad).
+- **Editar** una cotización ya creada (título y repuestos) desde `/editar.html?uuid=...`.
+  Un repuesto que ya recibió precios de algún proveedor no se puede borrar (para no dejar
+  precios huérfanos), pero sí se puede seguir editando su nombre/código/cantidad.
+- **Elegir ganador** por repuesto directamente en la tabla de resultados — arma
+  automáticamente una "Lista de compra" agrupada por proveedor con el total a pagar a cada uno.
+- **Catálogo con autocompletado**: al crear o editar una cotización, el campo de nombre del
+  repuesto sugiere nombres ya usados antes (para evitar duplicados como "pastillas freno" /
+  "pastillas de freno").
+- **Historial de proveedores** (`/proveedores.html`): veces invitado, precios enviados, veces
+  que tuvo el precio más bajo, veces elegido como ganador.
+- **Botón de WhatsApp** en cada tarjeta de contacto de proveedor (abre wa.me con mensaje
+  pre-armado).
+- **Exportar a Excel / PDF** desde la página de resultados (se genera en el navegador, no
+  necesita backend adicional).
+- **Notificación por correo** (opcional) cuando un proveedor envía precios — ver más abajo.
+- Buscador de repuestos histórico (`/buscar.html`) con precio más bajo histórico.
 
-Instala las dependencias y arranca el punto de entrada unificado.
+## Cambios en el Google Sheet
 
-```bash
-cd "APP TALLER"
-python3 -m pip install -r requirements.txt
-python3 app.py
+Estos cambios se aplican solos la primera vez que la app corre después de actualizar el
+código — no necesitas tocar el Sheet a mano:
+
+- La pestaña `Parts` ahora tiene una columna extra `quantity` al final.
+- Se crea una pestaña nueva `Winners` (quote_uuid, part_id, supplier_id, chosen_at) para
+  guardar qué proveedor elegiste como ganador de cada repuesto.
+- Si ya tenías repuestos creados antes de este cambio, su cantidad queda vacía; la app la
+  trata como `1` automáticamente hasta que la edites.
+
+## Notificación por correo (opcional)
+
+Si quieres que te llegue un correo cada vez que un proveedor envía precios, agrega estas
+variables de entorno (si no las agregas, la app sigue funcionando igual, solo sin avisos):
+
+```
+RESEND_API_KEY=tu-api-key-de-resend.com
+ADMIN_EMAIL=tu-correo@ejemplo.com
+RESEND_FROM_EMAIL=onboarding@resend.dev   # opcional, o tu dominio verificado en Resend
+SITE_URL=https://tu-proyecto.vercel.app   # opcional, para incluir el link directo al resultado
 ```
 
-Después abre `http://127.0.0.1:8000`. Sin las variables de Google, el sistema utiliza los Excel incluidos de forma local; este modo facilita pruebas sin afectar los datos de producción.
+[resend.com](https://resend.com) tiene un plan gratis y no requiere tarjeta para empezar;
+con la dirección `onboarding@resend.dev` puedes enviarte correos a ti mismo sin verificar
+un dominio propio (para producción real con tu propio dominio, sí tendrías que verificarlo
+en Resend).
 
-## Publicación en GitHub y Vercel
+## 1. Preparar Google Sheets (igual que siempre)
 
-La aplicación cumple el patrón de Vercel para Flask: expone una instancia `app` en un archivo de entrada compatible. Vercel también recomienda utilizar el directorio `public/` para estáticos de funciones Flask; en este proyecto los estáticos se entregan desde cada módulo Flask por compatibilidad con las tres interfaces existentes.[3]
+1. Google Cloud Console → crea/usa un proyecto → habilita **Google Sheets API**.
+2. **Credenciales → Crear credenciales → Cuenta de servicio** → créala →
+   pestaña **Claves → Agregar clave → JSON** → descarga el archivo.
+3. Del JSON copia `client_email` y `private_key`.
+4. Crea un Google Sheet (puede quedar vacío; las 5 pestañas y encabezados se
+   crean solas la primera vez que la app llama a la API). La lectura se hace por nombre de
+   encabezado, no por posición fija; por eso conserva datos aunque Excel haya cambiado el orden
+   de las columnas. También reconoce encabezados equivalentes en español como `Cotización`,
+   `Nombre`, `Cantidad`, `Teléfono` y `Precio`.
+5. **Compartir** el Sheet con el `client_email` de la Service Account, rol
+   **Editor**.
+6. Copia el ID del Sheet desde la URL:
+   `https://docs.google.com/spreadsheets/d/EL_ID_VA_AQUI/edit`
 
-| Etapa | Acción |
-| --- | --- |
-| GitHub | Crea un repositorio privado o público, sube este directorio y confirma que `.env`, claves JSON y archivos temporales no aparezcan en el historial. |
-| Vercel | Importa el repositorio, conserva el directorio raíz donde se encuentra `app.py` y deja que Vercel instale `requirements.txt`. |
-| Variables | Crea `GOOGLE_SHEETS_ID` y `GOOGLE_SERVICE_ACCOUNT_JSON` en los entornos que vayas a desplegar. |
-| Despliegue | Lanza el deploy y comprueba `/api/health`. Debe responder `{"ok": true, "backend": "google_sheets", ...}`. |
-| Operación | Descarga un respaldo antes de una restauración. Al restaurar, confirma el aviso de la aplicación y luego comprueba los tres módulos. |
+## 2. Completa las variables de entorno. Este proyecto usa nombres distintos a la versión anterior:
 
-Vercel reconoce una instancia Flask llamada `app` en puntos de entrada como `app.py`, y permite configurar el tiempo máximo de la función mediante `vercel.json`.[3]
+```bash
+cp .env.example .env.local
+```
 
-## Estrategias de respaldo
+Completa `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`,
+`SPREADSHEET_ID` y `ADMIN_PASSWORD`. En Vercel, crea esas mismas variables para **Production**
+y vuelve a desplegar. No uses `GOOGLE_SHEETS_ID` ni `GOOGLE_SERVICE_ACCOUNT_JSON` de la aplicación
+anterior: este proyecto no las lee.
 
-| Enfoque | Uso recomendado | Ventajas | Consideraciones |
-| --- | --- | --- | --- |
-| **Google Sheets + XLSX global** — implementado | Operación diaria del taller | Datos compartidos, consulta manual en Sheets y restauración completa desde la aplicación. | Requiere una cuenta de servicio y una única configuración inicial. |
-| **Solo XLSX local** | Pruebas aisladas o contingencia local | No requiere credenciales ni conexión externa. | No es adecuado para Vercel porque el almacenamiento local de funciones no es persistente. |
+## 3. Probar en local con Vercel CLI
 
-La segunda estrategia permanece disponible de forma automática cuando no existen variables de Google, pero el despliegue de producción debe usar la primera.
+Como el backend son funciones serverless de Vercel (no un servidor Express),
+la forma correcta de probarlo en local —con el mismo comportamiento que en
+producción— es con `vercel dev`:
 
-## Validación realizada
+```bash
+npm install -g vercel      # si no lo tienes instalado
+npm install                 # instala googleapis
+vercel dev                  # levanta todo en http://localhost:3000
+```
 
-Se han verificado de forma local los siguientes flujos: carga del menú, disponibilidad de los tres módulos, lectura de sus API, descarga del respaldo global XLSX y carga de ese mismo respaldo. La prueba de humo finalizó correctamente con las diez pestañas de datos restauradas.
+La primera vez te pedirá loguearte con tu cuenta de Vercel y "linkear" la
+carpeta a un proyecto (puedes crear uno nuevo, ej. `cotizador-repuestos`).
+`vercel dev` lee automáticamente las variables de `.env.local`.
 
-## Seguridad y mantenimiento
+Abre `http://localhost:3000/admin.html`, entra con `ADMIN_PASSWORD`, crea una
+cotización y copia el enlace `/cotizar.html?uuid=...` para probarlo como
+proveedor (puedes abrirlo en una ventana de incógnito).
 
-No subas cuentas de servicio, archivos `.env` ni credenciales de Vercel al repositorio. La descarga de un respaldo contiene los datos operativos de los tres módulos, por lo que debe almacenarse en una ubicación controlada. Antes de cargar un archivo de respaldo, descarga la versión actual como punto de retorno.
+> Si prefieres no instalar Vercel CLI globalmente: `npx vercel dev`.
 
-## Referencias
+## 4. Desplegar a Vercel
 
-[1] [Google Sheets API: Python quickstart](https://developers.google.com/workspace/sheets/api/quickstart/python)
+```bash
+vercel          # despliegue de prueba (preview)
+vercel --prod    # despliegue a producción
+```
 
-[2] [Vercel: Environment Variables](https://vercel.com/docs/environment-variables)
+O conecta el repo de GitHub desde el dashboard de Vercel (Import Project).
+En cualquiera de los dos casos, agrega las variables de entorno en
+**Project Settings → Environment Variables**: `GOOGLE_SHEETS_CLIENT_EMAIL`,
+`GOOGLE_SHEETS_PRIVATE_KEY`, `SPREADSHEET_ID` y `ADMIN_PASSWORD` (pega
+`GOOGLE_SHEETS_PRIVATE_KEY` con los `\\n` literales; el adaptador los convierte a saltos de línea).
 
-[3] [Vercel: Deploy a Flask app](https://vercel.com/docs/frameworks/backend/flask)
+No hace falta configurar nada más: Vercel detecta automáticamente que
+`public/` es el contenido estático y que cada archivo en `api/` es un
+endpoint (`api/quotes.js` → `/api/quotes`, etc.).
+
+## Notas de diseño
+
+- **Sesión admin**: cookie `HttpOnly` con `sha256(ADMIN_PASSWORD)`. Cada
+  función protegida (`quotes.js` GET/POST, `quote-status.js`, `results.js`)
+  llama a `requireAuth()`; las páginas `admin.html` y `results.html`
+  consultan `/api/session` al cargar y redirigen a `admin-login.html` si no
+  hay sesión.
+- **Anti-duplicados**: `suppliers.js` normaliza el teléfono (solo dígitos) y
+  busca coincidencias dentro de la misma `quote_uuid` antes de guardar.
+- **IDs**: `crypto.randomUUID()` generado siempre en el servidor (dentro de
+  cada función de `/api`), nunca en el navegador.
+- **Diagnóstico**: `GET /api/health` verifica acceso real a Google Sheets y devuelve el conteo de
+  filas por pestaña. Si falla, devuelve el error desde la función serverless en lugar de declarar
+  éxito solo porque existen variables.
+- **Sin build step**: no hay bundler, ni TypeScript, ni React — todo es
+  JS plano servido tal cual, más fácil de depurar y de modificar a mano.

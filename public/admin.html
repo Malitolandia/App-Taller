@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel de Administración — Cotizador de Repuestos</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <div class="header-bar">
+      <h1 style="margin: 0;">Cotizador de Repuestos</h1>
+      <div style="display:flex; align-items:center; gap:16px;">
+        <a href="/buscar.html" class="btn-link">🔍 Buscar repuestos</a>
+        <a href="/proveedores.html" class="btn-link">📊 Proveedores</a>
+        <button id="logout-btn" class="btn-link">Cerrar sesión</button>
+      </div>
+    </div>
+
+    <div id="created-alert"></div>
+
+    <datalist id="parts-catalog"></datalist>
+
+    <form id="create-form" class="card">
+      <h2>Nueva cotización</h2>
+
+      <div class="field" style="margin-top: 16px;">
+        <label class="label" for="title">Título de la cotización</label>
+        <input id="title" name="title" type="text" required
+          placeholder="Ej: Repuestos suspensión Chevrolet Spark GT" />
+      </div>
+
+      <!-- CAMPO DE IMAGEN DE LA COTIZACIÓN -->
+      <div class="field" style="margin-top: 12px;">
+        <label class="label">Imagen de la cotización (opcional)</label>
+        <div class="quote-image-box">
+          <label class="image-upload-label" id="quote-image-label">
+            <input type="file" id="quote-image-input" accept="image/jpeg,image/png" hidden />
+            <span class="image-upload-placeholder" id="quote-image-placeholder">📷<br>Subir imagen</span>
+            <img class="image-thumb" id="quote-image-thumb" style="display:none;" alt="Imagen de la cotización" />
+          </label>
+          <button type="button" id="quote-remove-image" class="remove-image-link" style="display:none;">Quitar imagen</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px;">
+        <span class="label" style="margin-bottom: 8px; display: block;">Repuestos</span>
+        <div id="parts-list"></div>
+        <!-- Botón movido debajo de la lista -->
+        <div style="margin-top: 12px; text-align: left;">
+          <button type="button" id="add-part-btn" class="btn-secondary">+ Agregar repuesto</button>
+        </div>
+      </div>
+
+      <div id="create-error"></div>
+
+      <button type="submit" id="create-submit-btn" class="btn btn-primary" style="margin-top: 16px;">
+        Crear cotización
+      </button>
+    </form>
+
+    <div style="margin-top: 32px;">
+      <h2>Cotizaciones creadas</h2>
+      <div id="quotes-list" style="margin-top: 12px;">
+        <p class="spinner-text">Cargando…</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/image-utils.js"></script>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

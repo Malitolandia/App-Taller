@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ingresar — Cotizador de Repuestos</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <main class="center-screen" style="background: var(--navy-900);">
+    <form id="login-form" class="card" style="max-width: 380px; width: 100%;">
+      <h1>Panel de Administración</h1>
+      <p class="subtitle">Ingresa la contraseña para continuar.</p>
+
+      <div class="field">
+        <label class="label" for="password">Contraseña</label>
+        <input id="password" name="password" type="password" required autofocus />
+      </div>
+
+      <div id="error-box"></div>
+
+      <button type="submit" id="submit-btn" class="btn btn-primary" style="margin-top: 8px;">
+        Ingresar
+      </button>
+    </form>
+  </main>
+
+  <script src="/js/login.js"></script>
+</body>
+</html>

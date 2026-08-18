@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Buscador de Repuestos</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <main class="container-wide">
+    <div class="header-bar">
+      <div>
+        <a href="/admin.html" class="btn-link">← Volver al panel</a>
+        <h1 style="margin-top: 6px;">Buscador de Repuestos</h1>
+        <p class="subtitle" style="margin-bottom:0;">
+          Busca por nombre o código entre todas las cotizaciones históricas.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="field" style="margin-bottom: 0;">
+        <label class="label" for="search-input">Buscar repuesto</label>
+        <input id="search-input" type="text" placeholder="Ej: pastillas de freno, o el código..." autofocus />
+      </div>
+    </div>
+
+    <div id="results" style="margin-top: 20px;"></div>
+  </main>
+
+  <script src="/js/buscar.js"></script>
+</body>
+</html>
