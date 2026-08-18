@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import importlib.util
+import io
+from pathlib import Path
+
+from flask import Flask, jsonify, request, send_file
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
+
+from storage import export_workbook_bytes, import_full_workbook_stream, storage_status, sync_seed_workbooks
+
+ROOT = Path(__file__).resolve().parent
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if not spec or not spec.loader:
+        raise ImportError(f"No se pudo cargar {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+control = load_module("apptaller_control", ROOT / "ControlTaller" / "app.py")
+neveras = load_module("apptaller_neveras", ROOT / "Neveras" / "servidor.py")
+peritaje = load_module("apptaller_peritaje", ROOT / "Peritaje" / "app.py")
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+
+@app.get("/")
+def menu():
+    return send_file(ROOT / "menu.html")
+
+@app.get("/api/health")
+def health():
+    status = storage_status()
+    # En Google Sheets, "ok" exige una lectura real de metadatos de la hoja.
+    # Así no se confunde una variable presente con una conexión utilizable.
+    ok = status.get("remote_connected", True)
+    return jsonify({"ok": ok, **status}), (200 if ok else 503)
+
+def existing_or_template(data_path: Path, template_path: Path) -> str:
+    return str(data_path if data_path.exists() else template_path)
+
+
+# Rutas operativas utilizadas por los módulos. En Google Sheets estas rutas
+# solo identifican al origen lógico; no se escribe en el sistema de archivos.
+CONTROL_FILE = control.EXCEL_FILE
+NEVERAS_FILE = neveras.EXCEL_PATH
+PERITAJE_FILE = peritaje.EXCEL_FILE
+ALL_FILES = [CONTROL_FILE, NEVERAS_FILE, PERITAJE_FILE]
+
+# Las plantillas se usan únicamente para crear una hoja remota nueva sin
+# publicar registros operativos en el repositorio.
+SEED_FILES = [
+    existing_or_template(ROOT / "ControlTaller" / "data" / "taller_control.xlsx", ROOT / "ControlTaller" / "plantilla_control.xlsx"),
+    existing_or_template(ROOT / "Neveras" / "INVENTARIO_NEVERAS.xlsx", ROOT / "Neveras" / "plantilla_neveras.xlsx"),
+    existing_or_template(ROOT / "Peritaje" / "data" / "peritajes.xlsx", ROOT / "Peritaje" / "plantilla_peritajes.xlsx"),
+]
+SHEET_OWNERS = {
+    **{name: CONTROL_FILE for name in control.SHEET_HEADERS},
+    **{name: NEVERAS_FILE for name in ("Inventario", "Ventas", "Clientes")},
+    "Peritajes": PERITAJE_FILE,
+}
+
+# Si Google Sheets está configurado, conserva los datos locales del ZIP como
+# semilla inicial. Los errores se registran y no impiden iniciar la aplicación.
+try:
+    sync_seed_workbooks(SEED_FILES)
+except Exception:
+    app.logger.exception("No se pudo sincronizar la semilla inicial con Google Sheets")
+
+@app.get("/api/db/export")
+def export_database():
+    content = export_workbook_bytes(ALL_FILES)
+    return send_file(
+        io.BytesIO(content),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="APPTALLER_respaldo.xlsx",
+    )
+
+@app.post("/api/db/import")
+def import_database():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"success": False, "error": "Selecciona un archivo .xlsx"}), 400
+    if not uploaded.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"success": False, "error": "El respaldo debe estar en formato .xlsx o .xlsm"}), 400
+    try:
+        imported = import_full_workbook_stream(uploaded.stream, ALL_FILES, SHEET_OWNERS)
+        return jsonify({"success": True, "imported_sheets": imported})
+    except Exception as exc:
+        app.logger.exception("Error al importar respaldo")
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+app.wsgi_app = DispatcherMiddleware(
+    app.wsgi_app,
+    {
+        "/control": control.app,
+        "/neveras": neveras.app,
+        "/peritaje": peritaje.app,
+    },
+)
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8000)
