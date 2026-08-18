@@ -183,6 +183,95 @@ def leer_inventario_base():
     return prods
 
 
+def _primera_fila_vacia_inventario(ws):
+    """Devuelve la primera fila libre de Inventario según la columna A."""
+    max_row = max(int(ws.max_row or 1), 1)
+    for row_number in range(2, max_row + 1):
+        value = ws.cell(row=row_number, column=1).value
+        if value is None or str(value).strip() == '':
+            return row_number
+    return max_row + 1
+
+
+def _numero_no_negativo(value, campo, entero=False):
+    """Valida importes y cantidades recibidos desde el formulario web."""
+    if value is None or str(value).strip() == '':
+        raise ValueError(f'El campo {campo} es obligatorio')
+    try:
+        numero = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'El campo {campo} debe ser numérico') from exc
+    if numero != numero or numero in (float('inf'), float('-inf')) or numero < 0:
+        raise ValueError(f'El campo {campo} debe ser un número no negativo')
+    if entero and not numero.is_integer():
+        raise ValueError(f'El campo {campo} debe ser un número entero')
+    return int(numero) if entero else round(numero, 2)
+
+
+def agregar_producto(producto, costo, precio, stock_inicial, stock_minimo):
+    """Agrega un producto nuevo a Inventario y confirma la sincronización remota."""
+    wb = None
+    try:
+        nombre = str(producto or '').strip()
+        if not nombre:
+            raise ValueError('El nombre del producto es obligatorio')
+
+        costo = _numero_no_negativo(costo, 'Costo')
+        precio = _numero_no_negativo(precio, 'Precio de venta')
+        stock_inicial = _numero_no_negativo(stock_inicial, 'Stock inicial', entero=True)
+        stock_minimo = _numero_no_negativo(stock_minimo, 'Stock mínimo', entero=True)
+
+        wb = load_workbook_for_app(EXCEL_PATH)
+        ws = wb['Inventario']
+        nombres_existentes = {
+            str(ws.cell(row=row_number, column=1).value).strip().casefold()
+            for row_number in range(2, max(int(ws.max_row or 1), 1) + 1)
+            if ws.cell(row=row_number, column=1).value not in (None, '')
+        }
+        if nombre.casefold() in nombres_existentes:
+            return False, 'Ya existe un producto con ese nombre', None
+
+        fila = _primera_fila_vacia_inventario(ws)
+        ganancia_unitaria = round(precio - costo, 2)
+        stock_actual = stock_inicial
+        estado = '🚫 AGOTADO' if stock_actual <= 0 else ('⚠ SURTIR' if stock_actual <= stock_minimo else '✅ OK')
+        valores = [
+            nombre,
+            costo,
+            precio,
+            ganancia_unitaria,
+            stock_inicial,
+            stock_minimo,
+            0,
+            stock_actual,
+            estado,
+            round(costo * stock_inicial, 2),
+            round(ganancia_unitaria * stock_inicial, 2),
+        ]
+        for column, value in enumerate(valores, start=1):
+            ws.cell(row=fila, column=column, value=value)
+
+        resultado = wb.save(EXCEL_PATH)
+        confirmado = bool(resultado and resultado.get('Inventario'))
+        if not confirmado:
+            raise RuntimeError('Google Sheets no confirmó la actualización de Inventario')
+
+        return True, None, {
+            'producto': nombre,
+            'costo': costo,
+            'precio': precio,
+            'ganUnit': ganancia_unitaria,
+            'stockIni': stock_inicial,
+            'stockMin': stock_minimo,
+            'vendidos': 0,
+            'stockAct': stock_actual,
+            'estado': estado,
+        }
+    finally:
+        if wb is not None:
+            wb.close()
+
+
 def calcular_inventario_y_clientes(ventas, prods_base):
     inventario = []
     for p in prods_base:
@@ -490,6 +579,35 @@ def get_productos():
         } for p in inv])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/nuevo-producto', methods=['POST'])
+def nuevo_producto():
+    data = request.get_json(silent=True) or {}
+    try:
+        ok, error, producto = agregar_producto(
+            data.get('producto'),
+            data.get('costo'),
+            data.get('precio'),
+            data.get('stockInicial'),
+            data.get('stockMin'),
+        )
+        if not ok:
+            return jsonify({'ok': False, 'error': error}), 409
+        return jsonify({
+            'ok': True,
+            'mensaje': f"✅ Producto '{producto['producto']}' guardado en Google Sheets",
+            'producto': producto,
+        })
+    except Exception as exc:
+        quota_status = google_error_status(exc)
+        if quota_status:
+            return jsonify({
+                'ok': False,
+                'error': 'Google Sheets está temporalmente limitado por cuota. Espera unos segundos y vuelve a intentar.',
+                'retry_after_seconds': 10,
+            }), quota_status
+        return jsonify({'ok': False, 'error': str(exc)}), 400
 
 
 @app.route('/api/lista-clientes')

@@ -439,6 +439,88 @@ async function marcarPagado(num) {
   }
 }
 
+// ── NUEVO PRODUCTO ────────────────────────────────────────────
+function abrirProductoModal() {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; el producto no se guardará.', true);
+    return;
+  }
+  $('p-nombre').value = '';
+  $('p-costo').value = '';
+  $('p-precio').value = '';
+  $('p-stock').value = '0';
+  $('p-stock-min').value = '0';
+  $('producto-overlay').classList.add('open');
+  $('p-nombre').focus();
+}
+
+function cerrarProductoModal() {
+  $('producto-overlay').classList.remove('open');
+}
+
+async function guardarProducto() {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; el producto no se guardó.', true);
+    return;
+  }
+
+  const producto = $('p-nombre').value.trim();
+  const costo = $('p-costo').value;
+  const precio = $('p-precio').value;
+  const stockInicial = $('p-stock').value;
+  const stockMin = $('p-stock-min').value;
+
+  if (!producto) { toast('⚠️ Escribe el nombre del producto', true); return; }
+  if (costo === '' || precio === '' || stockInicial === '' || stockMin === '') {
+    toast('⚠️ Completa todos los campos numéricos', true); return;
+  }
+
+  const costoNumero = Number(costo);
+  const precioNumero = Number(precio);
+  const stockNumero = Number(stockInicial);
+  const stockMinNumero = Number(stockMin);
+  if (![costoNumero, precioNumero, stockNumero, stockMinNumero].every(Number.isFinite)
+      || [costoNumero, precioNumero, stockNumero, stockMinNumero].some(value => value < 0)
+      || !Number.isInteger(stockNumero) || !Number.isInteger(stockMinNumero)) {
+    toast('⚠️ Revisa los valores: costos no negativos y stocks enteros', true);
+    return;
+  }
+
+  const btn = $('p-save');
+  btn.disabled = true;
+  btn.textContent = '⏳ Guardando en Google Sheets...';
+  try {
+    const response = await fetch(API + '/nuevo-producto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        producto,
+        costo: costoNumero,
+        precio: precioNumero,
+        stockInicial: stockNumero,
+        stockMin: stockMinNumero,
+      }),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      toast('Error: ' + (data.error || `HTTP ${response.status}`), true);
+      return;
+    }
+
+    const nuevo = data.producto;
+    if (nuevo) D.inventario.push(nuevo);
+    renderAll();
+    cerrarProductoModal();
+    toast(data.mensaje || '✅ Producto guardado en Google Sheets');
+  } catch (error) {
+    toast('No se pudo conectar al servidor: ' + (error.message || 'error de red'), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Guardar producto';
+  }
+}
+
 // ── INIT ──────────────────────────────────────────────────────
 Chart.defaults.color        = '#6b7590';
 Chart.defaults.borderColor  = '#1e2330';
