@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VENE AUTOS · Sistema de Peritaje</title>
+<style>
+  :root {
+    --red: #C0392B; --red-dark: #96281B; --red-light: #F9EBEA;
+    --dark: #2C3E50; --gray: #7F8C8D; --light: #ECF0F1;
+    --green: #27AE60; --orange: #F39C12; --white: #fff;
+    --border: #DDD; --shadow: 0 2px 10px rgba(0,0,0,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #F4F6F8; color: #333; }
+
+  nav { background: var(--dark); color: white; padding: 0 2rem; display: flex;
+    align-items: center; justify-content: space-between; height: 60px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2); position: sticky; top: 0; z-index: 100; }
+  nav .brand { display: flex; align-items: center; gap: 12px; }
+  nav img { height: 40px; }
+  nav .brand-text { font-size: 1.1rem; font-weight: 700; }
+  nav .brand-text span { color: var(--red); }
+
+  .btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 0.85rem; font-weight: 600; transition: all 0.2s; display: inline-flex;
+    align-items: center; gap: 6px; }
+  .btn-red { background: var(--red); color: white; }
+  .btn-red:hover { background: var(--red-dark); }
+  .btn-dark { background: var(--dark); color: white; }
+  .btn-dark:hover { background: #34495e; }
+  .btn-outline { background: transparent; color: white; border: 1px solid rgba(255,255,255,0.4); }
+  .btn-outline:hover { background: rgba(255,255,255,0.1); }
+  .btn-green { background: var(--green); color: white; }
+  .btn-green:hover { background: #219A52; }
+  .btn-gray { background: #95A5A6; color: white; }
+  .btn-gray:hover { background: #7F8C8D; }
+  .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+  .btn-xs { padding: 3px 8px; font-size: 0.72rem; }
+
+  .tabs { display: flex; background: white; border-bottom: 2px solid var(--border); padding: 0 2rem; }
+  .tab { padding: 14px 22px; cursor: pointer; font-weight: 600; color: var(--gray);
+    border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s; font-size: 0.9rem; }
+  .tab:hover { color: var(--dark); }
+  .tab.active { color: var(--red); border-bottom-color: var(--red); }
+
+  .panel { display: none; padding: 2rem; max-width: 1200px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  .card { background: white; border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1.5rem; }
+  .card-header { background: var(--dark); color: white; padding: 12px 20px;
+    font-weight: 700; font-size: 0.9rem; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card-header .spacer { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .card-body { padding: 1.5rem; }
+
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 0.78rem; font-weight: 600; color: var(--gray); text-transform: uppercase; letter-spacing: 0.5px; }
+  .form-group input, .form-group select, .form-group textarea {
+    padding: 9px 12px; border: 1.5px solid var(--border); border-radius: 6px;
+    font-size: 0.9rem; transition: border 0.2s; font-family: inherit; }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--red); }
+  .form-group textarea { resize: vertical; min-height: 70px; }
+  .form-group.full { grid-column: 1 / -1; }
+
+  /* ITEMS */
+  .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0.8rem; }
+  .item-row { display: grid; grid-template-columns: 1fr 130px 28px; gap: 6px; align-items: start;
+    padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 8px;
+    background: #FAFAFA; transition: border-color 0.2s; }
+  .item-row:hover { border-color: #BDC3C7; }
+  .item-row.custom { border-color: #AED6F1; background: #EBF5FB; }
+  .item-name { font-size: 0.85rem; font-weight: 600; color: var(--dark); margin-bottom: 4px; }
+  .item-name.editable { border: none; background: transparent; font-weight: 600;
+    font-size: 0.85rem; color: var(--dark); width: 100%; padding: 0;
+    border-bottom: 1px dashed #AED6F1; outline: none; }
+  .item-name.editable:focus { border-bottom-color: var(--red); }
+  .item-obs input { font-size: 0.78rem; padding: 5px 8px; width: 100%; margin-top: 4px;
+    border: 1.5px solid var(--border); border-radius: 4px; }
+  .estado-select { font-size: 0.82rem; font-weight: 600; padding: 6px 8px;
+    border: 1.5px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+  .estado-select.Bueno { background: #EAFAF1; border-color: var(--green); color: var(--green); }
+  .estado-select.Regular { background: #FEF9E7; border-color: var(--orange); color: var(--orange); }
+  .estado-select.Malo { background: #FDEDEC; border-color: var(--red); color: var(--red); }
+  .estado-select.NoAplica { background: #F2F3F4; border-color: var(--gray); color: var(--gray); }
+  .btn-delete-item { background: none; border: none; color: #C0392B; cursor: pointer;
+    font-size: 1rem; padding: 4px; border-radius: 4px; opacity: 0.4; transition: opacity 0.2s; align-self: start; margin-top: 2px; }
+  .btn-delete-item:hover { opacity: 1; background: #FDEDEC; }
+
+  /* ADD ITEM BAR */
+  .add-item-bar { display: flex; gap: 8px; align-items: center; margin-top: 1rem;
+    padding: 12px; background: #EBF5FB; border-radius: 8px; border: 1.5px dashed #AED6F1; flex-wrap: wrap; }
+  .add-item-bar input { flex: 1; min-width: 180px; padding: 8px 12px; border: 1.5px solid #AED6F1;
+    border-radius: 6px; font-size: 0.9rem; }
+  .add-item-bar input:focus { outline: none; border-color: var(--red); }
+
+  .form-actions { display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap; padding-top: 1rem; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  thead th { background: var(--dark); color: white; padding: 10px 14px; text-align: left; font-weight: 600; white-space: nowrap; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+  tbody tr:hover { background: #F8F9FA; }
+  tbody td { padding: 10px 14px; white-space: nowrap; }
+  td .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+  td .badge.red { background: var(--red-light); color: var(--red); }
+
+  .search-bar { display: flex; gap: 10px; margin-bottom: 1.2rem; flex-wrap: wrap; align-items: center; }
+  .search-bar input { flex: 1; min-width: 200px; padding: 9px 14px; border: 1.5px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
+  .search-bar input:focus { outline: none; border-color: var(--red); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .stat-card { background: white; border-radius: 10px; padding: 1.2rem; text-align: center; box-shadow: var(--shadow); border-top: 3px solid var(--red); }
+  .stat-num { font-size: 2rem; font-weight: 800; color: var(--red); }
+  .stat-label { font-size: 0.78rem; color: var(--gray); font-weight: 600; margin-top: 4px; }
+
+  #toast { position: fixed; bottom: 30px; right: 30px; background: var(--dark);
+    color: white; padding: 14px 24px; border-radius: 8px; font-size: 0.9rem;
+    font-weight: 600; transform: translateY(100px); opacity: 0; transition: all 0.3s;
+    z-index: 999; border-left: 4px solid var(--green); }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast.error { border-left-color: var(--red); }
+</style>
+</head>
+<body>
+<script>const APP_BASE = "{{ request.script_root }}";</script>
+
+<nav>
+  <div class="brand">
+    <img src="{{ request.script_root }}/static/logo.png" alt="Logo">
+    <div class="brand-text"><span>VENE</span> AUTOS · Peritaje</div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn btn-outline" onclick="volverAlMenu()">🏠 Menú Principal</button>
+    <button class="btn btn-outline" onclick="downloadExcel()">📊 Descargar Excel</button>
+  </div>
+</nav>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('nuevo', this)">➕ Nuevo Peritaje</div>
+  <div class="tab" onclick="switchTab('historial', this)">📋 Historial</div>
+</div>
+
+<!-- NUEVO PERITAJE -->
+<div class="panel active" id="panel-nuevo">
+
+  <div class="card">
+    <div class="card-header">👤 DATOS DEL CLIENTE Y VEHÍCULO</div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="form-group"><label>Fecha</label><input type="date" id="fecha"></div>
+        <div class="form-group"><label>N° Orden de Trabajo</label><input type="text" id="num_ot" placeholder="VEN-0131"></div>
+        <div class="form-group"><label>Cliente *</label><input type="text" id="cliente" placeholder="Nombre completo"></div>
+        <div class="form-group"><label>Placa *</label><input type="text" id="placa" placeholder="GFK-244" style="text-transform:uppercase"></div>
+        <div class="form-group"><label>Marca *</label><input type="text" id="marca" placeholder="Renault"></div>
+        <div class="form-group"><label>Modelo *</label><input type="text" id="modelo" placeholder="Kwid"></div>
+        <div class="form-group"><label>Año</label><input type="number" id="anio" placeholder="2022" min="1990" max="2030"></div>
+        <div class="form-group"><label>Color</label><input type="text" id="color" placeholder="Blanco"></div>
+        <div class="form-group"><label>Kilometraje</label><input type="number" id="kilometraje" placeholder="45000"></div>
+        <div class="form-group"><label>Técnico</label><input type="text" id="tecnico" placeholder="Nombre del técnico"></div>
+        <div class="form-group"><label>Estado General</label>
+          <select id="estado_general">
+            <option value="">Seleccionar...</option>
+            <option>Bueno</option><option>Regular</option><option>Malo</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Total Estimado ($)</label><input type="number" id="total_estimado" placeholder="0"></div>
+        <div class="form-group full"><label>Observaciones Generales</label>
+          <textarea id="observaciones" placeholder="Descripción general del estado del vehículo..."></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      🔧 INSPECCIÓN DE COMPONENTES
+      <div class="spacer">
+        <button class="btn btn-sm btn-green" onclick="marcarTodos('Bueno')">✓ Todo Bueno</button>
+        <button class="btn btn-sm btn-gray" onclick="marcarTodos('No aplica')">— No Aplica</button>
+        <button class="btn btn-sm btn-dark" onclick="limpiarItems()">↺ Limpiar</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="items-grid" id="items-container"></div>
+
+      <!-- AGREGAR ITEM MANUALMENTE -->
+      <div class="add-item-bar">
+        <span style="font-size:0.85rem;font-weight:700;color:#2980B9;white-space:nowrap">➕ Agregar ítem:</span>
+        <input type="text" id="nuevo-item-nombre" placeholder="Nombre del componente (ej: Bomba de agua)" 
+          onkeydown="if(event.key==='Enter') agregarItem()">
+        <button class="btn btn-sm" style="background:#2980B9;color:white" onclick="agregarItem()">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button class="btn btn-dark" onclick="limpiarFormulario()">↺ Nuevo / Limpiar</button>
+    <button class="btn btn-outline" style="color:var(--dark);border-color:var(--border)" onclick="previewPDF()">👁 Vista Previa PDF</button>
+    <button class="btn btn-green" onclick="guardarPeritaje()">💾 Guardar Peritaje</button>
+    <button class="btn btn-red" onclick="guardarYExportarPDF()">📄 Guardar y Exportar PDF</button>
+  </div>
+</div>
+
+<!-- HISTORIAL -->
+<div class="panel" id="panel-historial">
+  <div class="stats" id="stats-container"></div>
+  <div class="search-bar">
+    <input type="text" id="search-input" placeholder="🔍 Buscar por cliente, placa, marca..." oninput="filtrarHistorial()">
+    <button class="btn btn-red" onclick="loadHistorial()">🔄 Actualizar</button>
+    <button class="btn btn-dark" onclick="downloadExcel()">📊 Excel</button>
+  </div>
+  <div class="card">
+    <div class="card-body" style="padding:0">
+      <div class="table-wrap">
+        <table id="historial-table">
+          <thead>
+            <tr>
+              <th>N° Peritaje</th><th>Fecha</th><th>Cliente</th>
+              <th>Placa</th><th>Vehículo</th><th>Técnico</th>
+              <th>Total Est.</th><th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="historial-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const DEFAULT_ITEMS = {{ items | tojson }};
+const ESTADOS = {{ estados | tojson }};
+let customItems = []; // items agregados manualmente
+let allPeritajes = [];
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('fecha').value = new Date().toISOString().split('T')[0];
+  buildItemsGrid();
+  loadHistorial();
+});
+
+function itemKey(name) {
+  return name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+}
+
+function buildItemsGrid() {
+  const container = document.getElementById('items-container');
+  container.innerHTML = '';
+  const allItems = [...DEFAULT_ITEMS, ...customItems];
+  allItems.forEach((item, idx) => {
+    const isCustom = idx >= DEFAULT_ITEMS.length;
+    addItemRow(item, isCustom);
+  });
+}
+
+function addItemRow(item, isCustom = false) {
+  const container = document.getElementById('items-container');
+  const key = itemKey(item);
+  const div = document.createElement('div');
+  div.className = 'item-row' + (isCustom ? ' custom' : '');
+  div.id = `row_${key}`;
+  div.innerHTML = `
+    <div>
+      ${isCustom
+        ? `<input class="item-name editable" id="name_${key}" value="${item}" 
+             onchange="renameCustomItem('${key}', this.value)" placeholder="Nombre del componente">`
+        : `<div class="item-name">${item}</div>`}
+      <div class="item-obs">
+        <input type="text" id="obs_${key}" placeholder="Observación..." style="width:100%;margin-top:4px">
+      </div>
+    </div>
+    <select class="estado-select" id="estado_${key}" onchange="updateEstadoStyle(this)" data-item="${item}">
+      <option value="">—</option>
+      ${ESTADOS.map(e => `<option value="${e}">${e}</option>`).join('')}
+    </select>
+    <button class="btn-delete-item" onclick="eliminarItem('${key}', ${isCustom})" title="Eliminar ítem">✕</button>
+  `;
+  container.appendChild(div);
+}
+
+function agregarItem() {
+  const input = document.getElementById('nuevo-item-nombre');
+  const nombre = input.value.trim();
+  if (!nombre) { showToast('⚠️ Escribe el nombre del componente', true); return; }
+  if ([...DEFAULT_ITEMS, ...customItems].includes(nombre)) {
+    showToast('⚠️ Ese ítem ya existe', true); return;
+  }
+  customItems.push(nombre);
+  addItemRow(nombre, true);
+  input.value = '';
+  input.focus();
+  showToast(`✅ Ítem "${nombre}" agregado`);
+}
+
+function renameCustomItem(key, newName) {
+  const idx = customItems.findIndex(i => itemKey(i) === key);
+  if (idx !== -1) customItems[idx] = newName;
+}
+
+function eliminarItem(key, isCustom) {
+  const row = document.getElementById(`row_${key}`);
+  if (row) row.remove();
+  if (isCustom) {
+    customItems = customItems.filter(i => itemKey(i) !== key);
+  }
+}
+
+function updateEstadoStyle(sel) {
+  sel.className = 'estado-select ' + (sel.value === 'No aplica' ? 'NoAplica' : sel.value);
+}
+
+function marcarTodos(estado) {
+  document.querySelectorAll('.estado-select').forEach(sel => {
+    sel.value = estado;
+    updateEstadoStyle(sel);
+  });
+}
+
+function limpiarItems() {
+  document.querySelectorAll('.estado-select').forEach(sel => {
+    sel.value = ''; sel.className = 'estado-select';
+  });
+  document.querySelectorAll('.item-obs input').forEach(i => i.value = '');
+}
+
+function collectData() {
+  const items = {};
+  const allItems = [...DEFAULT_ITEMS, ...customItems];
+  allItems.forEach(item => {
+    const key = itemKey(item);
+    const estado = document.getElementById(`estado_${key}`)?.value || '';
+    const obs = document.getElementById(`obs_${key}`)?.value || '';
+    if (estado || obs) items[item] = { estado, obs };
+  });
+  // también capturar items custom con nombre editado
+  document.querySelectorAll('.item-name.editable').forEach(input => {
+    const key = input.id.replace('name_', '');
+    const nombre = input.value.trim();
+    const estado = document.getElementById(`estado_${key}`)?.value || '';
+    const obs = document.getElementById(`obs_${key}`)?.value || '';
+    if (nombre && (estado || obs)) items[nombre] = { estado, obs };
+  });
+  return {
+    fecha: document.getElementById('fecha').value,
+    num_ot: document.getElementById('num_ot').value,
+    cliente: document.getElementById('cliente').value,
+    placa: document.getElementById('placa').value.toUpperCase(),
+    marca: document.getElementById('marca').value,
+    modelo: document.getElementById('modelo').value,
+    anio: document.getElementById('anio').value,
+    color: document.getElementById('color').value,
+    kilometraje: document.getElementById('kilometraje').value,
+    tecnico: document.getElementById('tecnico').value,
+    estado_general: document.getElementById('estado_general').value,
+    total_estimado: document.getElementById('total_estimado').value,
+    observaciones: document.getElementById('observaciones').value,
+    items
+  };
+}
+
+async function guardarPeritaje() {
+  const data = collectData();
+  if (!data.cliente || !data.placa) { showToast('⚠️ Cliente y placa son obligatorios', true); return; }
+  const res = await fetch(APP_BASE + '/api/peritaje', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
+  });
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok || !r.success) {
+    showToast(`❌ ${r.error || `Error al guardar (${res.status})`}`, true);
+    return null;
+  }
+  showToast(`✅ Guardado: ${r.num_peritaje}`);
+  document.getElementById('num_ot').value = r.num_peritaje;
+  loadHistorial();
+  return r.num_peritaje;
+}
+
+async function guardarYExportarPDF() {
+  const num = await guardarPeritaje();
+  if (!num) return;
+  const data = collectData();
+  data.num_peritaje = num;
+  exportarPDF(data);
+}
+
+function previewPDF() {
+  const data = collectData();
+  data.num_peritaje = 'PREVIEW';
+  exportarPDF(data);
+}
+
+function exportarPDF(data) {
+  fetch(APP_BASE + '/api/peritaje/pdf', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
+  }).then(r => r.blob()).then(blob => {
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  });
+}
+
+function limpiarFormulario() {
+  ['num_ot','cliente','placa','marca','modelo','anio','color','kilometraje','tecnico','observaciones','total_estimado']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('estado_general').value = '';
+  document.getElementById('fecha').value = new Date().toISOString().split('T')[0];
+  customItems = [];
+  buildItemsGrid();
+}
+
+async function loadHistorial() {
+  const res = await fetch(APP_BASE + '/api/peritajes');
+  allPeritajes = await res.json();
+  renderHistorial(allPeritajes);
+  renderStats(allPeritajes);
+}
+
+function renderStats(data) {
+  document.getElementById('stats-container').innerHTML = `
+    <div class="stat-card"><div class="stat-num">${data.length}</div><div class="stat-label">Total Peritajes</div></div>
+  `;
+}
+
+function filtrarHistorial() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  renderHistorial(allPeritajes.filter(p =>
+    (p['Cliente']||'').toLowerCase().includes(q) ||
+    (p['Placa']||'').toLowerCase().includes(q) ||
+    (p['Marca']||'').toLowerCase().includes(q) ||
+    (p['N° Peritaje']||'').toLowerCase().includes(q)
+  ));
+}
+
+function renderHistorial(data) {
+  const tbody = document.getElementById('historial-body');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:#999">No hay peritajes registrados</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(p => `
+    <tr>
+      <td><span class="badge red">${p['N° Peritaje']||''}</span></td>
+      <td>${p['Fecha']||''}</td>
+      <td><strong>${p['Cliente']||''}</strong></td>
+      <td>${p['Placa']||''}</td>
+      <td>${p['Marca']||''} ${p['Modelo']||''}</td>
+      <td>${p['Técnico']||'—'}</td>
+      <td>${p['Total Estimado'] ? '$'+Number(p['Total Estimado']).toLocaleString('es-CO') : '—'}</td>
+      <td><button class="btn btn-red btn-sm" onclick='exportarDesdeHistorial(${JSON.stringify(p)})'>📄 PDF</button></td>
+    </tr>`).join('');
+}
+
+function exportarDesdeHistorial(p) {
+  exportarPDF({
+    num_peritaje: p['N° Peritaje'], fecha: p['Fecha'], num_ot: p['N° OT'],
+    cliente: p['Cliente'], placa: p['Placa'], marca: p['Marca'],
+    modelo: p['Modelo'], anio: p['Año'], color: p['Color'],
+    kilometraje: p['Kilometraje'], tecnico: p['Técnico'],
+    observaciones: p['Observaciones Generales'], total_estimado: p['Total Estimado'],
+    items: {}
+  });
+}
+
+function downloadExcel() { window.location.href = APP_BASE + '/api/excel'; }
+
+function volverAlMenu() {
+  // history.back() funciona porque llegaste desde menu.html en la misma pestaña.
+  // Si no hay historial (abriste esta página directo), intenta el archivo local como respaldo.
+  if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    window.location = '/';
+  }
+}
+
+function switchTab(tab, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(`panel-${tab}`).classList.add('active');
+  if (tab === 'historial') loadHistorial();
+}
+
+function showToast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = '', 3000);
+}
+</script>
+</body>
+</html>
