@@ -474,6 +474,131 @@ def marcar_venta_pagada(num):
         return False, str(e)
 
 
+def cobrar_deuda_cliente(cliente, monto):
+    """Cobra ventas pendientes completas de un cliente, total o parcialmente.
+
+    El cobro parcial se aplica en orden cronológico y nunca divide una venta:
+    se marcan tantas ventas completas como permita el monto recibido. Si el
+    importe es menor que la primera venta pendiente, se devuelve un error para
+    evitar registrar un cobro ambiguo.
+    """
+    nombre = str(cliente or '').strip().upper()
+    if not nombre:
+        return False, 'El cliente es obligatorio', None
+
+    try:
+        monto = float(monto)
+    except (TypeError, ValueError):
+        return False, 'El monto debe ser numérico', None
+    if monto != monto or monto in (float('inf'), float('-inf')) or monto <= 0:
+        return False, 'El monto debe ser mayor que cero', None
+    monto = round(monto, 2)
+
+    wb = None
+    try:
+        # Una sola carga lógica del libro y un solo save al finalizar.
+        wb = load_workbook_for_app(EXCEL_PATH)
+        ws_ventas = wb['Ventas']
+        ws_inv = wb['Inventario']
+
+        precios = {}
+        for fila in ws_inv.iter_rows(min_row=2, values_only=True):
+            producto = _at(fila, 0)
+            if producto:
+                precios[str(producto).strip()] = _as_float(_at(fila, 2))
+
+        pendientes = []
+        deuda_total = 0.0
+        for fila_num in range(2, max(int(ws_ventas.max_row or 1), 1) + 1):
+            fecha = ws_ventas.cell(row=fila_num, column=2).value
+            if fecha is None or str(fecha).strip() == '':
+                continue
+
+            cli = str(ws_ventas.cell(row=fila_num, column=4).value or '').strip().upper()
+            pago = str(ws_ventas.cell(row=fila_num, column=10).value or '').strip().upper()
+            if cli != nombre or pago == 'SI':
+                continue
+
+            producto = str(ws_ventas.cell(row=fila_num, column=5).value or '').strip()
+            cantidad = _as_int(ws_ventas.cell(row=fila_num, column=6).value)
+            precio = _as_float(ws_ventas.cell(row=fila_num, column=7).value)
+            total = _as_float(ws_ventas.cell(row=fila_num, column=8).value)
+            # Las fórmulas pueden no traer valor cacheado inmediatamente;
+            # calcular el total con el inventario como ya hace leer_ventas().
+            if total <= 0 and producto in precios:
+                precio = precios[producto]
+                total = round(cantidad * precio, 2)
+            if total <= 0:
+                continue
+
+            numero = ws_ventas.cell(row=fila_num, column=1).value
+            try:
+                numero = int(float(numero))
+            except (TypeError, ValueError):
+                numero = fila_num - 1
+
+            pendientes.append({'fila': fila_num, 'num': numero, 'total': total})
+            deuda_total += total
+
+        deuda_total = round(deuda_total, 2)
+        if not pendientes:
+            return False, f'El cliente {nombre} no tiene deudas pendientes', None
+
+        # Cobro total o selección de ventas completas hasta agotar el monto.
+        seleccionadas = []
+        acumulado = 0.0
+        for venta in pendientes:
+            if monto >= deuda_total - 0.005:
+                seleccionadas.append(venta)
+                continue
+            if acumulado + venta['total'] <= monto + 0.005:
+                seleccionadas.append(venta)
+                acumulado += venta['total']
+            else:
+                break
+
+        if not seleccionadas:
+            primera = pendientes[0]['total']
+            return False, (
+                f'El monto es menor que la primera venta pendiente '
+                f'({primera:.2f}). Para cobro parcial, ingresa al menos ese valor.'
+            ), None
+
+        for venta in seleccionadas:
+            ws_ventas.cell(row=venta['fila'], column=10).value = 'SI'
+            ws_ventas.cell(row=venta['fila'], column=11).value = '✅ PAGADO'
+
+        monto_aplicado = round(sum(v['total'] for v in seleccionadas), 2)
+        deuda_restante = round(max(0.0, deuda_total - monto_aplicado), 2)
+        resultado = wb.save(EXCEL_PATH)
+        if not resultado or not resultado.get('Ventas'):
+            raise RuntimeError('Google Sheets no confirmó la actualización de Ventas')
+
+        detalle = {
+            'cliente': nombre,
+            'montoSolicitado': monto,
+            'montoAplicado': monto_aplicado,
+            'deudaAnterior': deuda_total,
+            'deudaRestante': deuda_restante,
+            'ventasCobradas': [v['num'] for v in seleccionadas],
+        }
+        modalidad = 'total' if deuda_restante <= 0.005 else 'parcial'
+        mensaje = (
+            f'✅ Cobro {modalidad} aplicado a {nombre}: '
+            f'${monto_aplicado:,.2f}'
+        )
+        return True, mensaje, detalle
+
+    except PermissionError:
+        return False, 'El archivo Excel está abierto. Ciérralo e intenta de nuevo.', None
+    except Exception:
+        # Dejar que el manejador global preserve, entre otros, el 503 de cuota.
+        raise
+    finally:
+        if wb is not None:
+            wb.close()
+
+
 # ── HELPER: archivos estáticos en ambas carpetas ─────────────
 
 def _static(nombre):
@@ -559,6 +684,28 @@ def marcar_pagado():
     return jsonify({
         'ok':         True,
         'mensaje':    f'✅ Venta #{num} marcada como pagada',
+        'ventas':     ventas,
+        'inventario': inv,
+        'clientes':   cli,
+    })
+
+
+@app.route('/api/cobrar-cliente', methods=['POST'])
+def cobrar_cliente():
+    data = request.get_json(silent=True) or {}
+    cliente = data.get('cliente', '')
+    monto = data.get('monto')
+    ok, mensaje, detalle = cobrar_deuda_cliente(cliente, monto)
+    if not ok:
+        return jsonify({'ok': False, 'error': mensaje}), 400
+
+    prods  = leer_inventario_base()
+    ventas = leer_ventas(prods)
+    inv, cli = calcular_inventario_y_clientes(ventas, prods)
+    return jsonify({
+        'ok':         True,
+        'mensaje':    mensaje,
+        'detalle':    detalle,
         'ventas':     ventas,
         'inventario': inv,
         'clientes':   cli,

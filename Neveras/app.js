@@ -170,9 +170,7 @@ function rVentas() {
       <td>${fmt(r.precio)}</td>
       <td style="font-weight:600">${fmt(r.total)}</td>
       <td><span class="pill ${r.metodo==='Efectivo'?'pg':r.metodo==='Transferencia'?'pb':'pr'}">${r.metodo}</span></td>
-      <td>${r.pago === 'NO'
-            ? `<button class="pagar-btn" onclick="marcarPagado(${r.num})">💳 Cobrar</button>`
-            : r.estado}</td>
+      <td>${r.estado || (r.pago === 'SI' ? '✅ PAGADO' : '🔴 PENDIENTE')}</td>
       <td style="color:var(--ac)">${fmt(r.ganancia)}</td>
     </tr>`
   ).join('');
@@ -221,15 +219,22 @@ function rDeudas() {
   $('deu-sub').textContent = morosos.length + ' clientes con deuda · Total: ' + fmt(td);
   $('dgrid').innerHTML = morosos.length === 0
     ? `<div style="color:var(--tm);font-size:14px;padding:12px">✅ No hay deudas pendientes</div>`
-    : morosos.map(c =>
-        `<div class="dcard debe">
+    : morosos.map(c => {
+        const clienteCodificado = encodeURIComponent(String(c.cliente || '')).replace(/'/g, '%27');
+        return `<div class="dcard debe">
           <div class="dcli">${c.cliente}</div>
           <div class="drow"><span>Total comprado</span><strong>${fmt(c.comprado)}</strong></div>
           <div class="drow"><span>Total pagado</span><strong style="color:var(--ac)">${fmt(c.pagado)}</strong></div>
           <div class="drow"><span>N° compras</span><strong>${c.compras}</strong></div>
           <div class="dtotal r">${fmt(c.deuda)}</div>
-        </div>`
-      ).join('');
+          <div class="dcard-footer">
+            <span>Saldo pendiente</span>
+            <button type="button" class="deuda-cobrar-btn"
+                    onclick="abrirCobroDeuda(decodeURIComponent('${clienteCodificado}'), ${Number(c.deuda) || 0})"
+                    title="Cobrar el total o registrar un cobro parcial">💳 Cobrar</button>
+          </div>
+        </div>`;
+      }).join('');
 }
 
 // ── RENDER CLIENTES ───────────────────────────────────────────
@@ -458,6 +463,85 @@ async function marcarPagado(num) {
     } catch { toast('No se pudo conectar', true); }
   } else {
     toast('Google Sheets no está disponible; no se modificó la venta.', true);
+  }
+}
+
+// ── COBRAR DEUDA POR CLIENTE ──────────────────────────────────
+let cobroActual = null;
+
+function abrirCobroDeuda(cliente, deudaTotal) {
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; no se modificó la deuda.', true);
+    return;
+  }
+
+  const deuda = Number(deudaTotal);
+  if (!cliente || !Number.isFinite(deuda) || deuda <= 0) {
+    toast('La deuda seleccionada no tiene un saldo válido.', true);
+    return;
+  }
+
+  cobroActual = { cliente: String(cliente), deuda };
+  $('cobro-cliente').textContent = cobroActual.cliente;
+  $('cobro-monto').value = deuda.toFixed(2);
+  $('cobro-monto').max = deuda.toFixed(2);
+  $('cobro-ayuda').textContent = `Total pendiente: ${fmt(deuda)}. Para un cobro parcial, edita el monto sin superar este saldo.`;
+  $('cobro-overlay').classList.add('open');
+  $('cobro-monto').focus();
+  $('cobro-monto').select();
+}
+
+function cerrarCobroDeuda() {
+  $('cobro-overlay').classList.remove('open');
+  cobroActual = null;
+}
+
+async function confirmarCobroDeuda() {
+  if (!cobroActual) return;
+  if (!remoteReady) {
+    toast('Google Sheets no está disponible; no se modificó la deuda.', true);
+    return;
+  }
+
+  const montoTexto = $('cobro-monto').value.trim().replace(',', '.');
+  const monto = Number(montoTexto);
+  const deuda = cobroActual.deuda;
+  if (!montoTexto || !Number.isFinite(monto) || monto <= 0) {
+    toast('⚠️ Escribe un monto mayor que cero', true);
+    return;
+  }
+  if (monto > deuda + 0.005) {
+    toast(`⚠️ El monto no puede superar la deuda de ${fmt(deuda)}`, true);
+    return;
+  }
+
+  const btn = $('cobro-save');
+  btn.disabled = true;
+  btn.textContent = '⏳ Registrando cobro...';
+  try {
+    const response = await fetch(API + '/cobrar-cliente', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cliente: cobroActual.cliente, monto }),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      toast('Error: ' + (data.error || `HTTP ${response.status}`), true);
+      return;
+    }
+
+    D.ventas = data.ventas;
+    D.inventario = data.inventario;
+    D.clientes = data.clientes;
+    renderAll();
+    cerrarCobroDeuda();
+    toast(data.mensaje || '✅ Cobro registrado en Google Sheets');
+  } catch (error) {
+    toast('No se pudo conectar al servidor: ' + (error.message || 'error de red'), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💳 Registrar cobro';
   }
 }
 

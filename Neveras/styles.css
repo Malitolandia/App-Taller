@@ -176,6 +176,20 @@ tr:last-child td { border-bottom: none; }
 .dtotal { font-family: 'Bebas Neue', sans-serif; font-size: 24px; margin-top: 10px; }
 .dtotal.r { color: var(--rd); }
 .dtotal.g { color: var(--ac); }
+.dcard-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--br); font-size: 10px; color: var(--tm);
+}
+.deuda-cobrar-btn {
+  background: rgba(0,229,160,.12); color: var(--ac);
+  border: 1px solid rgba(0,229,160,.25); padding: 7px 11px;
+  border-radius: 7px; font-size: 11px; font-weight: 700;
+  cursor: pointer; font-family: 'Space Grotesk', sans-serif; transition: all .2s;
+  white-space: nowrap;
+}
+.deuda-cobrar-btn:hover { background: rgba(0,229,160,.25); transform: translateY(-1px); }
+.deuda-cobrar-btn:active { transform: translateY(0); }
 
 /* ── INVENTARIO GRID ──────────────────────────── */
 .igrid {
