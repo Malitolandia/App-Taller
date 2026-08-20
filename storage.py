@@ -32,7 +32,18 @@ CONTROL_HEADERS = {
         "Factura Cancelada", "Estado", "Fecha Pago", "Grupo",
     ],
     "Gastos": ["ID", "Fecha", "Categoría", "Descripción", "Monto", "Responsable", "Método de Pago"],
-    "Pagos": ["ID", "Fecha Pago", "Mecánico", "Semana", "N° Trabajos", "Total Mano de Obra", "Total Comisión"],
+    "Pagos": [
+        "ID", "Fecha Pago", "Mecánico", "Semana", "N° Trabajos", "Total Mano de Obra",
+        "Total Comisión", "Total Descuentos", "Neto Pagado",
+    ],
+    "Prestamos": [
+        "ID", "Fecha", "Mecánico", "Monto Original", "Cuota Sugerida", "Total Descontado",
+        "Saldo Pendiente", "Estado", "Observaciones",
+    ],
+    "Descuentos Nomina": [
+        "ID", "Fecha Aplicación", "Mecánico", "Semana", "Concepto", "Monto",
+        "Préstamo ID", "Observaciones",
+    ],
     "Herramientas": [
         "ID", "Herramienta", "Prestada A", "Entregada Por", "Fecha Préstamo",
         "Fecha Devolución", "Estado", "Observaciones",
@@ -261,7 +272,15 @@ def _ensure_required_sheets() -> None:
         value_range = value_ranges[index] if index < len(value_ranges) else {}
         first_row = value_range.get("values", [])
         populated = bool(first_row and any(value not in (None, "") for value in first_row[0]))
-        if not populated:
+        # Pagos recibió columnas de descuentos y neto en esta versión. Solo se
+        # amplía si la fila existente conserva el encabezado anterior; no se
+        # reemplazan encabezados personalizados de las demás pestañas.
+        needs_payments_upgrade = (
+            title == "Pagos" and populated
+            and list(first_row[0][:len(headers)]) != list(headers)
+            and list(first_row[0][:7]) == ["ID", "Fecha Pago", "Mecánico", "Semana", "N° Trabajos", "Total Mano de Obra", "Total Comisión"]
+        )
+        if not populated or needs_payments_upgrade:
             response = _execute(values_api.update(
                 spreadsheetId=_spreadsheet_id(),
                 range=f"{_quote_title(title)}!A1",

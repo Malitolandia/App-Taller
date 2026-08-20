@@ -139,6 +139,7 @@
   <div class="tab active" data-tab="resumen">Resumen</div>
   <div class="tab" data-tab="mecanicos">Mecánicos</div>
   <div class="tab" data-tab="trabajos">Trabajos / Nómina</div>
+  <div class="tab" data-tab="prestamos">Préstamos / Descuentos</div>
   <div class="tab" data-tab="gastos">Gastos</div>
   <div class="tab" data-tab="herramientas">Herramientas</div>
 </div>
@@ -288,6 +289,78 @@
   </div>
 </div>
 
+<!-- ================= PRÉSTAMOS / DESCUENTOS ================= -->
+<div class="panel" id="panel-prestamos">
+  <div class="card">
+    <div class="card-header">REGISTRAR PRÉSTAMO A MECÁNICO</div>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:12px">El préstamo se conserva como saldo pendiente. La cuota sugerida puede modificarse al momento de aplicarla en una nómina.</p>
+      <div class="form-grid">
+        <div class="form-group"><label>Fecha</label><input id="pFecha" type="date"></div>
+        <div class="form-group"><label>Mecánico</label><select id="pMecanico"></select></div>
+        <div class="form-group"><label>Monto del préstamo</label><input id="pMonto" type="number" min="0.01" step="0.01" placeholder="0" oninput="normalizarCuotaPrestamo()"></div>
+        <div class="form-group"><label>Cuota sugerida por nómina</label><input id="pCuota" type="number" min="0.01" step="0.01" placeholder="0"></div>
+        <div class="form-group full"><label>Observaciones</label><input id="pObservaciones" placeholder="Motivo o acuerdo del préstamo (opcional)"></div>
+      </div>
+      <div class="form-actions"><button class="btn btn-red" onclick="crearPrestamo()">+ Registrar préstamo</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">LIQUIDACIÓN DE NÓMINA
+      <div class="spacer"><select class="filter" id="pSemana" onchange="cargarPanelPrestamos()"></select></div>
+    </div>
+    <div class="card-body">
+      <div class="kpi-grid">
+        <div class="kpi blue"><div class="label">Nómina antes de descuentos</div><div class="value" id="pBruto">$0</div></div>
+        <div class="kpi orange"><div class="label">Descuentos aplicados</div><div class="value" id="pDescuentos">$0</div></div>
+        <div class="kpi green"><div class="label">Saldo total de nómina</div><div class="value" id="pNeto">$0</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mecánico</th><th>Trabajos</th><th>Antes descuentos</th><th>Descuentos</th><th>Neto a pagar</th><th>Acción</th></tr></thead>
+          <tbody id="tblNominaPrestamos"><tr class="empty-row"><td colspan="6">Sin datos para la semana seleccionada</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">APLICAR DESCUENTO A LA NÓMINA</div>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:12px">Puedes aplicar la cuota sugerida o modificarla para este período. El sistema no permite superar el saldo del préstamo ni el bruto pendiente de la nómina.</p>
+      <div class="form-grid">
+        <div class="form-group"><label>Semana</label><select id="dSemana" onchange="sincronizarDescuentoDesdePanel()"></select></div>
+        <div class="form-group"><label>Mecánico</label><select id="dMecanico" onchange="cargarPrestamosDelDescuento()"></select></div>
+        <div class="form-group"><label>Préstamo (opcional)</label><select id="dPrestamo" onchange="usarCuotaPrestamo()"><option value="">Descuento general</option></select></div>
+        <div class="form-group"><label>Monto del descuento</label><input id="dMonto" type="number" min="0.01" step="0.01" placeholder="0"></div>
+        <div class="form-group"><label>Concepto</label><input id="dConcepto" value="Abono a préstamo" placeholder="Ej. Abono a préstamo"></div>
+        <div class="form-group full"><label>Observaciones</label><input id="dObservaciones" placeholder="Opcional"></div>
+      </div>
+      <div class="form-actions"><button class="btn btn-red" onclick="aplicarDescuento()">Aplicar descuento</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">PRÉSTAMOS Y SALDOS PENDIENTES</div>
+    <div class="card-body">
+      <div class="mec-cards" id="prestamoCards"><p class="hint">Aún no hay préstamos registrados.</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">HISTORIAL DE DESCUENTOS</div>
+    <div class="card-body">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>Mecánico</th><th>Semana</th><th>Concepto</th><th>Monto</th><th>Préstamo</th><th>Observaciones</th></tr></thead>
+          <tbody id="tblDescuentos"><tr class="empty-row"><td colspan="7">Sin descuentos aplicados</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ================= GASTOS ================= -->
 <div class="panel" id="panel-gastos">
   <div class="card">
@@ -380,6 +453,9 @@ let equipos = [];
 let modoActual = 'individual';
 
 function fmt(n) { return '$' + Math.round(n || 0).toLocaleString('es-CO'); }
+function escHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
 function todayStr() { return new Date().toISOString().slice(0,10); }
 
 function volverAlMenu() {
@@ -418,6 +494,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'resumen') cargarResumen();
     if (tab.dataset.tab === 'mecanicos') { cargarMecanicos(); cargarEquipos(); }
     if (tab.dataset.tab === 'trabajos') { cargarMecanicosSelect(); cargarEquiposSelect(); cargarNomina(); cargarTrabajos(); }
+    if (tab.dataset.tab === 'prestamos') { cargarPrestamoMecanicos(); cargarPanelPrestamos(); }
     if (tab.dataset.tab === 'gastos') cargarGastos();
     if (tab.dataset.tab === 'herramientas') { cargarHerramientasSelectMec(); cargarHerramientas(); }
   });
@@ -818,6 +895,194 @@ async function eliminarTrabajo(id) {
   cargarNomina(); cargarTrabajos();
 }
 
+// ---------- Préstamos y descuentos ----------
+let panelPrestamosData = { prestamos: [], descuentos: [], nomina: null };
+
+async function cargarPrestamoMecanicos() {
+  const data = await readJSON(APP_BASE + '/api/mecanicos');
+  mecanicos = data;
+  const activos = data.filter(m => m['Activo'] !== 'No');
+  const options = activos.map(m => `<option value="${escHtml(m['Nombre'])}">${escHtml(m['Nombre'])}</option>`).join('');
+  document.getElementById('pMecanico').innerHTML = options || '<option value="">Sin mecánicos activos</option>';
+  document.getElementById('dMecanico').innerHTML = options || '<option value="">Sin mecánicos activos</option>';
+  cargarPrestamosDelDescuento();
+}
+
+function setSemanaOptions(selectId, semanas, actual) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const values = semanas.length ? semanas : [actual];
+  sel.innerHTML = values.map(s => `<option value="${escHtml(s)}">${escHtml(s)}${s === actual ? ' (actual)' : ''}</option>`).join('');
+  sel.value = values.includes(actual) ? actual : values[0];
+}
+
+async function cargarPanelPrestamos() {
+  const requested = document.getElementById('pSemana')?.value || semanaActualKey();
+  const url = APP_BASE + '/api/prestamos/panel' + (requested ? `?semana=${encodeURIComponent(requested)}` : '');
+  const res = await fetch(url, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { showToast(data.error || `Error al cargar préstamos (${res.status})`, true); return; }
+  panelPrestamosData = data;
+  const actual = semanaActualKey();
+  const semanas = data.nomina.semanas_disponibles || [];
+  if (!semanas.includes(actual)) semanas.unshift(actual);
+  setSemanaOptions('pSemana', semanas, requested || actual);
+  setSemanaOptions('dSemana', semanas, document.getElementById('dSemana')?.value || requested || actual);
+  const bruto = data.nomina.totales?.bruto_pendiente || 0;
+  const descuentos = data.nomina.totales?.descuentos || 0;
+  const neto = data.nomina.totales?.neto_pagar || 0;
+  document.getElementById('pBruto').textContent = fmt(bruto);
+  document.getElementById('pDescuentos').textContent = fmt(descuentos);
+  document.getElementById('pNeto').textContent = fmt(neto);
+
+  const tbody = document.getElementById('tblNominaPrestamos');
+  const rows = data.nomina.resumen || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Sin datos para la semana seleccionada</td></tr>';
+  } else {
+    const semana = document.getElementById('pSemana').value;
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td><strong>${escHtml(r.mecanico)}</strong></td>
+        <td>${r.n_trabajos}</td>
+        <td>${fmt(r.bruto_pendiente)}</td>
+        <td style="color:var(--orange)">${fmt(r.descuentos)}</td>
+        <td style="color:var(--green);font-weight:700">${fmt(r.neto_pagar)}</td>
+        <td>${r.pendiente > 0 ? `<button class="btn btn-xs btn-gray" onclick="seleccionarDescuento(decodeURIComponent('${encodeURIComponent(r.mecanico)}'), decodeURIComponent('${encodeURIComponent(semana)}'))">Descontar</button> <button class="btn btn-xs btn-green" onclick="pagarNominaPeriodo('${encodeURIComponent(r.mecanico)}','${encodeURIComponent(semana)}')">Pagar nómina</button>` : '<span class="badge badge-pagado">Al día</span>'}</td>
+      </tr>`).join('');
+  }
+  renderPrestamos(data.prestamos || []);
+  renderDescuentos(data.descuentos || []);
+  cargarPrestamosDelDescuento();
+}
+
+function renderPrestamos(prestamos) {
+  const wrap = document.getElementById('prestamoCards');
+  if (!prestamos.length) { wrap.innerHTML = '<p class="hint">Aún no hay préstamos registrados.</p>'; return; }
+  wrap.innerHTML = prestamos.map(p => `
+    <div class="mec-card ${p.estado === 'Pagado' ? 'toggle-inactive' : ''}">
+      <h4>${escHtml(p.mecanico)} <span class="badge ${p.estado === 'Pagado' ? 'badge-pagado' : 'badge-pendiente'}">${escHtml(p.estado)}</span></h4>
+      <div class="mec-row"><span>Fecha</span><span>${escHtml(p.fecha || '—')}</span></div>
+      <div class="mec-row"><span>Monto original</span><strong>${fmt(p.monto_original)}</strong></div>
+      <div class="mec-row"><span>Descontado</span><span style="color:var(--green)">${fmt(p.total_descontado)}</span></div>
+      <div class="mec-row"><span>Saldo pendiente</span><strong style="color:var(--orange)">${fmt(p.saldo_pendiente)}</strong></div>
+      <div class="mec-row"><span>Cuota sugerida</span><span>${fmt(p.cuota_sugerida)}</span></div>
+      ${p.observaciones ? `<div class="hint">${escHtml(p.observaciones)}</div>` : ''}
+      <div class="actions">
+        ${p.estado !== 'Pagado' ? `<button class="btn btn-xs btn-gray" onclick="editarCuotaPrestamo(${p.id}, ${p.cuota_sugerida})">Editar cuota</button>` : ''}
+        ${p.total_descontado <= 0 ? `<button class="btn btn-xs btn-red" onclick="eliminarPrestamo(${p.id})">Eliminar</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function renderDescuentos(descuentos) {
+  const tbody = document.getElementById('tblDescuentos');
+  if (!descuentos.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Sin descuentos aplicados</td></tr>'; return; }
+  tbody.innerHTML = descuentos.slice().reverse().map(d => `
+    <tr><td>${escHtml(d.fecha_aplicacion)}</td><td>${escHtml(d.mecanico)}</td><td>${escHtml(d.semana)}</td>
+    <td>${escHtml(d.concepto)}</td><td><strong>${fmt(d.monto)}</strong></td>
+    <td>${d.prestamo_id ? '#' + d.prestamo_id : '—'}</td><td>${escHtml(d.observaciones || '—')}</td></tr>`).join('');
+}
+
+function normalizarCuotaPrestamo() {
+  const monto = Number(document.getElementById('pMonto').value || 0);
+  const cuota = document.getElementById('pCuota');
+  if (monto > 0 && (!cuota.value || Number(cuota.value) > monto)) cuota.value = monto;
+}
+
+async function crearPrestamo() {
+  const mecanico = document.getElementById('pMecanico').value;
+  const monto = Number(document.getElementById('pMonto').value || 0);
+  const cuota = Number(document.getElementById('pCuota').value || 0);
+  if (!mecanico || monto <= 0 || cuota <= 0) { showToast('Completa mecánico, monto y cuota con valores mayores que cero', true); return; }
+  if (cuota > monto) { showToast('La cuota no puede superar el monto del préstamo', true); return; }
+  if (!confirm(`¿Registrar préstamo de ${fmt(monto)} para ${mecanico}?`)) return;
+  const res = await fetch(APP_BASE + '/api/prestamo', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ mecanico, monto_original: monto, cuota_sugerida: cuota,
+      fecha: document.getElementById('pFecha').value || todayStr(), observaciones: document.getElementById('pObservaciones').value }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar (${res.status})`, true); return; }
+  ['pMonto','pCuota','pObservaciones'].forEach(id => document.getElementById(id).value = '');
+  showToast('Préstamo registrado correctamente');
+  cargarPanelPrestamos();
+}
+
+function cargarPrestamosDelDescuento() {
+  const mec = document.getElementById('dMecanico')?.value || '';
+  const sel = document.getElementById('dPrestamo');
+  if (!sel) return;
+  const loans = (panelPrestamosData.prestamos || []).filter(p => p.mecanico === mec && p.estado !== 'Pagado');
+  sel.innerHTML = '<option value="">Descuento general</option>' + loans.map(p => `<option value="${p.id}" data-cuota="${p.cuota_sugerida}" data-saldo="${p.saldo_pendiente}">#${p.id} — saldo ${fmt(p.saldo_pendiente)}</option>`).join('');
+}
+
+function usarCuotaPrestamo() {
+  const opt = document.getElementById('dPrestamo').selectedOptions[0];
+  if (opt?.dataset.cuota) document.getElementById('dMonto').value = Math.min(Number(opt.dataset.cuota), Number(opt.dataset.saldo || opt.dataset.cuota));
+}
+
+function sincronizarDescuentoDesdePanel() {
+  const value = document.getElementById('dSemana').value;
+  document.getElementById('pSemana').value = value;
+  cargarPanelPrestamos();
+}
+
+function seleccionarDescuento(mecanico, semana) {
+  document.getElementById('dMecanico').value = mecanico;
+  document.getElementById('dSemana').value = semana;
+  cargarPrestamosDelDescuento();
+  document.getElementById('dMonto').focus();
+}
+
+async function aplicarDescuento() {
+  const mecanico = document.getElementById('dMecanico').value;
+  const semana = document.getElementById('dSemana').value;
+  const monto = Number(document.getElementById('dMonto').value || 0);
+  const concepto = document.getElementById('dConcepto').value.trim();
+  if (!mecanico || !semana || monto <= 0 || !concepto) { showToast('Completa mecánico, semana, concepto y un monto válido', true); return; }
+  if (!confirm(`¿Aplicar descuento de ${fmt(monto)} a ${mecanico} en ${semana}?`)) return;
+  const res = await fetch(APP_BASE + '/api/nomina/descuento', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ mecanico, semana, monto, concepto, prestamo_id: document.getElementById('dPrestamo').value || null,
+      observaciones: document.getElementById('dObservaciones').value }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al aplicar (${res.status})`, true); return; }
+  document.getElementById('dMonto').value = '';
+  document.getElementById('dObservaciones').value = '';
+  showToast('Descuento aplicado y saldo actualizado');
+  cargarPanelPrestamos();
+}
+
+async function editarCuotaPrestamo(id, actual) {
+  const nueva = prompt('Nueva cuota por nómina:', actual);
+  if (nueva === null) return;
+  const monto = Number(nueva);
+  if (monto <= 0) { showToast('La cuota debe ser mayor que cero', true); return; }
+  const res = await fetch(`${APP_BASE}/api/prestamo/${id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ cuota_sugerida: monto }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al actualizar (${res.status})`, true); return; }
+  showToast('Cuota actualizada');
+  cargarPanelPrestamos();
+}
+
+async function eliminarPrestamo(id) {
+  if (!confirm('¿Eliminar este préstamo? Esta acción solo está permitida si no tiene descuentos aplicados.')) return;
+  const res = await fetch(`${APP_BASE}/api/prestamo/${id}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `No se pudo eliminar (${res.status})`, true); return; }
+  showToast('Préstamo eliminado');
+  cargarPanelPrestamos();
+}
+
+async function pagarNominaPeriodo(mecanicoEncoded, semanaEncoded) {
+  const mecanico = decodeURIComponent(mecanicoEncoded);
+  const semana = decodeURIComponent(semanaEncoded);
+  if (!confirm(`¿Confirmar pago neto de ${mecanico} para ${semana}?`)) return;
+  const res = await fetch(APP_BASE + '/api/nomina/pagar', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ mecanico, semana }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar el pago (${res.status})`, true); return; }
+  showToast(`Pago registrado: ${fmt(data.neto_pagado)} neto`);
+  cargarPanelPrestamos(); cargarNomina(); cargarResumen();
+}
+
 // ---------- Gastos ----------
 document.getElementById('gCategoria').addEventListener('change', function() {
   document.getElementById('gCategoriaCustomWrap').style.display = this.value === '__custom__' ? 'block' : 'none';
@@ -967,6 +1232,7 @@ async function eliminarHerramienta(id) {
 document.getElementById('trFecha').value = todayStr();
 document.getElementById('gFecha').value = todayStr();
 document.getElementById('herFecha').value = todayStr();
+document.getElementById('pFecha').value = todayStr();
 cargarResumen();
 cargarMecanicosSelect();
 cargarEquiposSelect();

@@ -34,7 +34,11 @@ SHEET_HEADERS = {
                  "Factura Cancelada", "Estado", "Fecha Pago", "Grupo"],
     "Gastos": ["ID", "Fecha", "Categoría", "Descripción", "Monto", "Responsable", "Método de Pago"],
     "Pagos": ["ID", "Fecha Pago", "Mecánico", "Semana", "N° Trabajos",
-              "Total Mano de Obra", "Total Comisión"],
+              "Total Mano de Obra", "Total Comisión", "Total Descuentos", "Neto Pagado"],
+    "Prestamos": ["ID", "Fecha", "Mecánico", "Monto Original", "Cuota Sugerida",
+                  "Total Descontado", "Saldo Pendiente", "Estado", "Observaciones"],
+    "Descuentos Nomina": ["ID", "Fecha Aplicación", "Mecánico", "Semana", "Concepto",
+                          "Monto", "Préstamo ID", "Observaciones"],
     "Herramientas": ["ID", "Herramienta", "Prestada A", "Entregada Por", "Fecha Préstamo",
                       "Fecha Devolución", "Estado", "Observaciones"],
 }
@@ -94,6 +98,136 @@ def week_key(fecha_str):
     d = datetime.strptime(fecha_str, "%Y-%m-%d").date()
     iso = d.isocalendar()
     return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def money(value):
+    try:
+        return round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def normalize_name(value):
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _row_values(row, headers):
+    return {headers[i]: row[i].value for i in range(min(len(headers), len(row)))}
+
+
+def _loan_records(wb):
+    """Devuelve préstamos con saldo calculado y no altera la hoja."""
+    ws = wb["Prestamos"]
+    headers = SHEET_HEADERS["Prestamos"]
+    records = []
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        original = money(values.get("Monto Original"))
+        discounted = money(values.get("Total Descontado"))
+        saldo = max(round(original - discounted, 2), 0.0)
+        estado = "Pagado" if saldo <= 0.009 else "Pendiente"
+        records.append({
+            "id": int(values.get("ID") or 0),
+            "fecha": values.get("Fecha") or "",
+            "mecanico": values.get("Mecánico") or "",
+            "monto_original": original,
+            "cuota_sugerida": money(values.get("Cuota Sugerida")),
+            "total_descontado": discounted,
+            "saldo_pendiente": saldo,
+            "estado": estado,
+            "observaciones": values.get("Observaciones") or "",
+        })
+    return records
+
+
+def _discount_records(wb):
+    ws = wb["Descuentos Nomina"]
+    headers = SHEET_HEADERS["Descuentos Nomina"]
+    records = []
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        records.append({
+            "id": int(values.get("ID") or 0),
+            "fecha_aplicacion": values.get("Fecha Aplicación") or "",
+            "mecanico": values.get("Mecánico") or "",
+            "semana": values.get("Semana") or "",
+            "concepto": values.get("Concepto") or "",
+            "monto": money(values.get("Monto")),
+            "prestamo_id": int(values["Préstamo ID"]) if str(values.get("Préstamo ID") or "").strip().isdigit() else None,
+            "observaciones": values.get("Observaciones") or "",
+        })
+    return records
+
+
+def _nomina_calculada(wb, semana=None, mecanico=None):
+    """Calcula bruto pendiente, descuentos aplicados y neto por mecánico."""
+    ws = wb["Trabajos"]
+    headers = SHEET_HEADERS["Trabajos"]
+    resumen = {}
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        if semana and values.get("Semana") != semana:
+            continue
+        if mecanico and values.get("Mecánico") != mecanico:
+            continue
+        if values.get("Factura Cancelada") != "Sí":
+            continue
+        mec = values.get("Mecánico") or "Sin asignar"
+        item = resumen.setdefault(mec, {
+            "mecanico": mec, "n_trabajos": 0, "total_mo": 0.0,
+            "total_comision": 0.0, "pendiente": 0.0, "pagado": 0.0,
+            "bruto_pendiente": 0.0, "descuentos": 0.0, "neto_pagar": 0.0,
+        })
+        monto_mo = money(values.get("Monto Mano de Obra"))
+        monto_mec = money(values.get("Monto Mecánico"))
+        item["n_trabajos"] += 1
+        item["total_mo"] += monto_mo
+        item["total_comision"] += monto_mec
+        if values.get("Estado") == "Pagado":
+            item["pagado"] += monto_mec
+        else:
+            item["pendiente"] += monto_mec
+
+    discounts = _discount_records(wb)
+    for item in resumen.values():
+        if semana:
+            item["descuentos"] = sum(
+                d["monto"] for d in discounts
+                if d["mecanico"] == item["mecanico"] and d["semana"] == semana
+            )
+        else:
+            item["descuentos"] = sum(
+                d["monto"] for d in discounts if d["mecanico"] == item["mecanico"]
+            )
+        item["bruto_pendiente"] = round(item["pendiente"], 2)
+        item["descuentos"] = round(item["descuentos"], 2)
+        item["neto_pagar"] = round(max(item["bruto_pendiente"] - item["descuentos"], 0), 2)
+        for key in ("total_mo", "total_comision", "pendiente", "pagado"):
+            item[key] = round(item[key], 2)
+    return list(resumen.values())
+
+
+def _nomina_response(wb, semana=None, mecanico=None):
+    resumen = _nomina_calculada(wb, semana=semana, mecanico=mecanico)
+    ws = wb["Trabajos"]
+    headers = SHEET_HEADERS["Trabajos"]
+    semanas = sorted({
+        _row_values(row, headers).get("Semana")
+        for row in ws.iter_rows(min_row=2)
+        if row[0].value is not None and _row_values(row, headers).get("Semana")
+    }, reverse=True)
+    totales = {
+        "bruto_pendiente": round(sum(r["bruto_pendiente"] for r in resumen), 2),
+        "descuentos": round(sum(r["descuentos"] for r in resumen), 2),
+        "neto_pagar": round(sum(r["neto_pagar"] for r in resumen), 2),
+    }
+    return {"resumen": resumen, "semanas_disponibles": semanas, "totales": totales}
 
 
 # ---------------------------------------------------------------------------
@@ -409,32 +543,168 @@ def delete_trabajo(tid):
 def nomina_resumen():
     semana = request.args.get('semana')
     wb = get_wb()
-    ws = wb["Trabajos"]
-    data = sheet_to_dicts(ws, SHEET_HEADERS["Trabajos"])
-    if semana:
-        data = [d for d in data if d.get("Semana") == semana]
+    return jsonify(_nomina_response(wb, semana=semana))
 
-    resumen = {}
-    for d in data:
-        if d.get("Factura Cancelada") != "Sí":
-            print(f"[DEBUG] nomina_resumen: excluyendo trabajo ID={d.get('ID')} Placa={d.get('Placa')} (Factura Cancelada={d.get('Factura Cancelada')!r})")
-            continue  # la factura del cliente aún no está cancelada: no se suma a lo que se le debe al mecánico
-        mec = d.get("Mecánico", "Sin asignar")
-        if mec not in resumen:
-            resumen[mec] = {"mecanico": mec, "n_trabajos": 0, "total_mo": 0,
-                             "total_comision": 0, "pendiente": 0, "pagado": 0}
-        r = resumen[mec]
-        r["n_trabajos"] += 1
-        r["total_mo"] += float(d.get("Monto Mano de Obra") or 0)
-        monto_mec = float(d.get("Monto Mecánico") or 0)
-        r["total_comision"] += monto_mec
-        if d.get("Estado") == "Pagado":
-            r["pagado"] += monto_mec
-        else:
-            r["pendiente"] += monto_mec
 
-    semanas = sorted({d.get("Semana") for d in sheet_to_dicts(ws, SHEET_HEADERS["Trabajos"]) if d.get("Semana")}, reverse=True)
-    return jsonify({"resumen": list(resumen.values()), "semanas_disponibles": semanas})
+# ---------------------------------------------------------------------------
+# API Préstamos y descuentos de Nómina
+# ---------------------------------------------------------------------------
+
+@app.route('/api/prestamos', methods=['GET'])
+def list_prestamos():
+    wb = get_wb()
+    mecanico = request.args.get('mecanico')
+    prestamos = _loan_records(wb)
+    descuentos = _discount_records(wb)
+    if mecanico:
+        prestamos = [p for p in prestamos if p['mecanico'] == mecanico]
+        descuentos = [d for d in descuentos if d['mecanico'] == mecanico]
+    return jsonify({'prestamos': prestamos, 'descuentos': descuentos})
+
+
+@app.route('/api/prestamos/panel', methods=['GET'])
+def prestamos_panel():
+    semana = request.args.get('semana')
+    wb = get_wb()
+    return jsonify({
+        'nomina': _nomina_response(wb, semana=semana),
+        'prestamos': _loan_records(wb),
+        'descuentos': _discount_records(wb),
+    })
+
+
+@app.route('/api/prestamo', methods=['POST'])
+def create_prestamo():
+    data = request.json or {}
+    mecanico = ' '.join(str(data.get('mecanico') or '').strip().split())
+    try:
+        monto = round(float(data.get('monto_original') or 0), 2)
+        cuota = round(float(data.get('cuota_sugerida') or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'El monto y la cuota deben ser numéricos'}), 400
+    if not mecanico or monto <= 0 or cuota <= 0:
+        return jsonify({'success': False, 'error': 'Mecánico, monto y cuota son obligatorios y deben ser mayores que cero'}), 400
+    if cuota > monto:
+        cuota = monto
+
+    wb = get_wb()
+    ws_mec = wb['Mecanicos']
+    if not any(normalize_name(row[1].value) == normalize_name(mecanico) and row[4].value != 'No'
+               for row in ws_mec.iter_rows(min_row=2) if row[0].value is not None):
+        return jsonify({'success': False, 'error': 'El mecánico no existe o está inactivo'}), 400
+    ws = wb['Prestamos']
+    pid = next_id(ws)
+    fecha = data.get('fecha') or datetime.now().strftime('%Y-%m-%d')
+    append_row(ws, SHEET_HEADERS['Prestamos'], {
+        'ID': pid, 'Fecha': fecha, 'Mecánico': mecanico,
+        'Monto Original': monto, 'Cuota Sugerida': cuota,
+        'Total Descontado': 0.0, 'Saldo Pendiente': monto,
+        'Estado': 'Pendiente', 'Observaciones': (data.get('observaciones') or '').strip(),
+    }, pid)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': pid, 'saldo_pendiente': monto})
+
+
+@app.route('/api/prestamo/<int:pid>', methods=['PUT'])
+def update_prestamo(pid):
+    data = request.json or {}
+    wb = get_wb()
+    ws = wb['Prestamos']
+    row = find_row_by_id(ws, pid)
+    if not row:
+        return jsonify({'success': False, 'error': 'Préstamo no encontrado'}), 404
+    headers = SHEET_HEADERS['Prestamos']
+    original = money(row[headers.index('Monto Original')].value)
+    descontado = money(row[headers.index('Total Descontado')].value)
+    if 'cuota_sugerida' in data:
+        try:
+            cuota = round(float(data.get('cuota_sugerida') or 0), 2)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'La cuota debe ser numérica'}), 400
+        if cuota <= 0 or cuota > max(round(original - descontado, 2), 0):
+            return jsonify({'success': False, 'error': 'La cuota debe ser mayor que cero y no superar el saldo pendiente'}), 400
+        ws.cell(row=row[0].row, column=headers.index('Cuota Sugerida') + 1, value=cuota)
+    if 'observaciones' in data:
+        ws.cell(row=row[0].row, column=headers.index('Observaciones') + 1, value=(data.get('observaciones') or '').strip())
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True})
+
+
+@app.route('/api/prestamo/<int:pid>', methods=['DELETE'])
+def delete_prestamo(pid):
+    wb = get_wb()
+    ws = wb['Prestamos']
+    row = find_row_by_id(ws, pid)
+    if not row:
+        return jsonify({'success': False, 'error': 'Préstamo no encontrado'}), 404
+    if any(d['prestamo_id'] == pid for d in _discount_records(wb)):
+        return jsonify({'success': False, 'error': 'No se puede eliminar un préstamo que ya tiene descuentos aplicados'}), 409
+    ws.delete_rows(row[0].row, 1)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True})
+
+
+@app.route('/api/nomina/descuento', methods=['POST'])
+def aplicar_descuento_nomina():
+    data = request.json or {}
+    mecanico = ' '.join(str(data.get('mecanico') or '').strip().split())
+    semana = str(data.get('semana') or '').strip()
+    concepto = ' '.join(str(data.get('concepto') or '').strip().split())
+    try:
+        monto = round(float(data.get('monto') or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'El descuento debe ser numérico'}), 400
+    if not mecanico or not semana or not concepto or monto <= 0:
+        return jsonify({'success': False, 'error': 'Mecánico, semana, concepto y monto son obligatorios'}), 400
+
+    raw_loan = data.get('prestamo_id')
+    loan_id = None
+    if raw_loan not in (None, '', 0, '0'):
+        try:
+            loan_id = int(raw_loan)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'El préstamo seleccionado no es válido'}), 400
+
+    wb = get_wb()
+    loans = _loan_records(wb)
+    loan = next((p for p in loans if p['id'] == loan_id), None) if loan_id else None
+    if loan_id and not loan:
+        return jsonify({'success': False, 'error': 'Préstamo no encontrado'}), 404
+    if loan and loan['mecanico'] != mecanico:
+        return jsonify({'success': False, 'error': 'El préstamo no pertenece al mecánico seleccionado'}), 400
+    if loan and monto > loan['saldo_pendiente']:
+        return jsonify({'success': False, 'error': 'El descuento supera el saldo pendiente del préstamo'}), 400
+
+    nomina = next((r for r in _nomina_calculada(wb, semana=semana, mecanico=mecanico)), None)
+    bruto = nomina['bruto_pendiente'] if nomina else 0.0
+    descuentos = _discount_records(wb)
+    ya_aplicado = sum(d['monto'] for d in descuentos if d['mecanico'] == mecanico and d['semana'] == semana)
+    disponible = max(round(bruto - ya_aplicado, 2), 0.0)
+    if monto > disponible:
+        return jsonify({'success': False, 'error': f'El descuento supera el saldo de nómina disponible ({disponible:.2f})'}), 400
+
+    ws_d = wb['Descuentos Nomina']
+    did = next_id(ws_d)
+    fecha = data.get('fecha') or datetime.now().strftime('%Y-%m-%d')
+    append_row(ws_d, SHEET_HEADERS['Descuentos Nomina'], {
+        'ID': did, 'Fecha Aplicación': fecha, 'Mecánico': mecanico,
+        'Semana': semana, 'Concepto': concepto, 'Monto': monto,
+        'Préstamo ID': loan_id or '', 'Observaciones': (data.get('observaciones') or '').strip(),
+    }, did)
+
+    if loan:
+        ws_l = wb['Prestamos']
+        row_l = find_row_by_id(ws_l, loan_id)
+        headers_l = SHEET_HEADERS['Prestamos']
+        total_descontado = round(loan['total_descontado'] + monto, 2)
+        saldo = max(round(loan['monto_original'] - total_descontado, 2), 0.0)
+        ws_l.cell(row=row_l[0].row, column=headers_l.index('Total Descontado') + 1, value=total_descontado)
+        ws_l.cell(row=row_l[0].row, column=headers_l.index('Saldo Pendiente') + 1, value=saldo)
+        ws_l.cell(row=row_l[0].row, column=headers_l.index('Estado') + 1, value='Pagado' if saldo <= 0.009 else 'Pendiente')
+
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': did, 'monto': monto, 'saldo_prestamo': loan['saldo_pendiente'] - monto if loan else None,
+                    'nomina': _nomina_response(wb, semana=semana)})
 
 
 @app.route('/api/nomina/pagar', methods=['POST'])
@@ -463,6 +733,25 @@ def pagar_nomina():
             row[headers.index("Estado")].value = "Pagado"
             row[headers.index("Fecha Pago")].value = fecha_pago
 
+    descuentos_periodo = sum(
+        d['monto'] for d in _discount_records(wb)
+        if d['mecanico'] == mecanico and d['semana'] == semana
+    )
+    # Si existía un pago anterior de la misma semana, sus descuentos ya fueron
+    # aplicados y no deben restarse otra vez sobre trabajos nuevos.
+    pagos_previos = 0.0
+    ws_pagos = wb['Pagos']
+    headers_pagos = SHEET_HEADERS['Pagos']
+    for row_pago in ws_pagos.iter_rows(min_row=2):
+        if row_pago[0].value is None:
+            continue
+        vals_pago = _row_values(row_pago, headers_pagos)
+        if vals_pago.get('Mecánico') == mecanico and vals_pago.get('Semana') == semana:
+            pagos_previos += money(vals_pago.get('Total Descuentos'))
+    total_descuentos = round(max(descuentos_periodo - pagos_previos, 0.0), 2)
+    total_descuentos = min(total_descuentos, round(total_comision, 2))
+    neto_pagado = round(max(total_comision - total_descuentos, 0), 2)
+
     if n_trabajos > 0:
         ws_pagos = wb["Pagos"]
         pid = next_id(ws_pagos)
@@ -470,10 +759,14 @@ def pagar_nomina():
             "ID": pid, "Fecha Pago": fecha_pago, "Mecánico": mecanico,
             "Semana": semana, "N° Trabajos": n_trabajos,
             "Total Mano de Obra": round(total_mo, 2), "Total Comisión": round(total_comision, 2),
+            "Total Descuentos": total_descuentos, "Neto Pagado": neto_pagado,
         }, pid)
 
     wb.save(EXCEL_FILE)
-    return jsonify({"success": True, "n_trabajos": n_trabajos, "total_comision": round(total_comision, 2)})
+    return jsonify({"success": True, "n_trabajos": n_trabajos,
+                    "total_comision": round(total_comision, 2),
+                    "total_descuentos": total_descuentos,
+                    "neto_pagado": neto_pagado})
 
 
 @app.route('/api/pagos', methods=['GET'])
