@@ -367,14 +367,14 @@
   <div class="card">
     <div class="card-header">REGISTRAR DEUDA DEL TALLER</div>
     <div class="card-body">
-      <p class="hint" style="margin-bottom:12px">La fecha de registro se asigna automáticamente. Puedes indicar una fecha única o un día de pago que se repite cada mes.</p>
+      <p class="hint" style="margin-bottom:12px">La fecha de registro se asigna automáticamente. Puedes indicar un pago único, una primera fecha semanal o un día de pago que se repite cada mes.</p>
       <div class="form-grid">
         <div class="form-group"><label>A quién se le debe</label><input id="dtAcreedor" placeholder="Ej. Proveedor, arrendador o persona"></div>
         <div class="form-group"><label>Concepto</label><input id="dtConcepto" placeholder="Ej. Repuestos, arriendo o servicio"></div>
         <div class="form-group"><label>Monto total</label><input id="dtMonto" type="number" min="0.01" step="0.01" placeholder="0"></div>
-        <div class="form-group"><label>Frecuencia de pago</label><select id="dtFrecuencia" onchange="cambiarFrecuenciaDeuda()"><option value="Mensual">Mensual</option><option value="Único">Pago único</option></select></div>
+        <div class="form-group"><label>Frecuencia de pago</label><select id="dtFrecuencia" onchange="cambiarFrecuenciaDeuda()"><option value="Mensual">Mensual</option><option value="Semanal">Semanal</option><option value="Único">Pago único</option></select></div>
         <div class="form-group" id="dtDiaWrap"><label>Día de pago mensual</label><input id="dtDiaPago" type="number" min="1" max="31" step="1" placeholder="15"></div>
-        <div class="form-group" id="dtFechaWrap" style="display:none"><label>Fecha de vencimiento</label><input id="dtFechaVencimiento" type="date"></div>
+        <div class="form-group" id="dtFechaWrap" style="display:none"><label id="dtFechaLabel">Fecha de vencimiento</label><input id="dtFechaVencimiento" type="date"></div>
         <div class="form-group full"><label>Observaciones</label><input id="dtObservaciones" placeholder="Opcional"></div>
       </div>
       <div class="form-actions"><button class="btn btn-red" onclick="crearDeudaTaller()">+ Registrar deuda</button></div>
@@ -1153,9 +1153,12 @@ async function pagarNominaPeriodo(mecanicoEncoded, semanaEncoded) {
 let panelDeudasData = { deudas: [], fondos: [], pagos: [], calendario: [], totales: {} };
 
 function cambiarFrecuenciaDeuda() {
-  const mensual = document.getElementById('dtFrecuencia').value === 'Mensual';
+  const frecuencia = document.getElementById('dtFrecuencia').value;
+  const mensual = frecuencia === 'Mensual';
   document.getElementById('dtDiaWrap').style.display = mensual ? '' : 'none';
   document.getElementById('dtFechaWrap').style.display = mensual ? 'none' : '';
+  const label = document.getElementById('dtFechaLabel');
+  if (label) label.textContent = frecuencia === 'Semanal' ? 'Primera fecha de pago semanal' : 'Fecha de vencimiento';
 }
 
 function estadoRecordatorio(item) {
@@ -1191,6 +1194,8 @@ function renderDeudasTaller(data) {
         <div class="actions">
           ${d.estado !== 'Pagado' && d.faltante_reunir > 0 ? `<button class="btn btn-xs btn-gray" onclick="registrarFondoDeuda(${d.id}, ${d.faltante_reunir})">+ Aportar al bolsillo</button>` : ''}
           ${d.estado !== 'Pagado' ? `<button class="btn btn-xs btn-green" onclick="pagarDeudaTaller(${d.id}, ${d.saldo_pendiente}, ${d.fondo_disponible})">Registrar pago</button>` : ''}
+          <button class="btn btn-xs btn-blue" onclick="editarDeudaTaller(${d.id})">Editar</button>
+          <button class="btn btn-xs btn-red" onclick="eliminarDeudaTaller(${d.id})">Eliminar</button>
         </div>
       </div>`).join('');
   }
@@ -1234,7 +1239,8 @@ async function crearDeudaTaller() {
   const fecha = document.getElementById('dtFechaVencimiento').value;
   if (!acreedor || !concepto || monto <= 0) { showToast('Completa acreedor, concepto y un monto válido', true); return; }
   if (frecuencia === 'Mensual' && (!Number.isInteger(dia) || dia < 1 || dia > 31)) { showToast('Indica un día mensual entre 1 y 31', true); return; }
-  if (frecuencia !== 'Mensual' && !fecha) { showToast('Indica la fecha de vencimiento', true); return; }
+  if (frecuencia === 'Semanal' && !fecha) { showToast('Indica la primera fecha de pago semanal', true); return; }
+  if (frecuencia === 'Único' && !fecha) { showToast('Indica la fecha de vencimiento', true); return; }
   if (!confirm(`¿Registrar deuda de ${fmt(monto)} a ${acreedor}?`)) return;
   const res = await fetch(APP_BASE + '/api/deuda-taller', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
     acreedor, concepto, monto_total: monto, frecuencia, dia_pago: dia, fecha_vencimiento: fecha,
@@ -1245,6 +1251,52 @@ async function crearDeudaTaller() {
   ['dtAcreedor','dtConcepto','dtMonto','dtDiaPago','dtFechaVencimiento','dtObservaciones'].forEach(id => document.getElementById(id).value = '');
   showToast('Deuda registrada correctamente');
   cargarPanelDeudas();
+}
+
+async function editarDeudaTaller(id) {
+  const deuda = (panelDeudasData.deudas || []).find(item => item.id === id);
+  if (!deuda) { showToast('Deuda no encontrada', true); return; }
+  const acreedor = prompt('A quién se le debe:', deuda.acreedor);
+  if (acreedor === null) return;
+  const concepto = prompt('Concepto:', deuda.concepto);
+  if (concepto === null) return;
+  const montoTexto = prompt('Monto total actualizado:', deuda.monto_total);
+  if (montoTexto === null) return;
+  const monto = Number(montoTexto);
+  if (!acreedor.trim() || !concepto.trim() || !Number.isFinite(monto) || monto <= 0) { showToast('Los datos de la deuda no son válidos', true); return; }
+  const frecuencia = prompt('Frecuencia: Mensual, Semanal o Único', deuda.frecuencia);
+  if (frecuencia === null) return;
+  const normalizada = frecuencia.trim().toLowerCase();
+  let frecuenciaFinal = normalizada === 'mensual' ? 'Mensual' : normalizada === 'semanal' ? 'Semanal' : normalizada === 'unico' || normalizada === 'único' ? 'Único' : '';
+  if (!frecuenciaFinal) { showToast('La frecuencia debe ser Mensual, Semanal o Único', true); return; }
+  let payload = { acreedor: acreedor.trim(), concepto: concepto.trim(), monto_total: monto, frecuencia: frecuenciaFinal, observaciones: deuda.observaciones || '' };
+  if (frecuenciaFinal === 'Mensual') {
+    const diaTexto = prompt('Día de pago mensual (1 a 31):', deuda.dia_pago);
+    if (diaTexto === null) return;
+    payload.dia_pago = Number(diaTexto);
+    if (!Number.isInteger(payload.dia_pago) || payload.dia_pago < 1 || payload.dia_pago > 31) { showToast('El día mensual no es válido', true); return; }
+  } else {
+    const fecha = prompt(frecuenciaFinal === 'Semanal' ? 'Primera fecha semanal (AAAA-MM-DD):' : 'Fecha de vencimiento (AAAA-MM-DD):', deuda.proximo_vencimiento);
+    if (fecha === null) return;
+    payload.fecha_vencimiento = fecha;
+  }
+  if (!confirm(`¿Guardar los cambios de la deuda de ${acreedor.trim()}?`)) return;
+  const res = await fetch(APP_BASE + `/api/deuda-taller/${id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al editar (${res.status})`, true); return; }
+  showToast('Deuda actualizada correctamente');
+  renderDeudasTaller(data.panel);
+}
+
+async function eliminarDeudaTaller(id) {
+  const deuda = (panelDeudasData.deudas || []).find(item => item.id === id);
+  if (!deuda) { showToast('Deuda no encontrada', true); return; }
+  if (!confirm(`¿Eliminar la deuda de ${deuda.acreedor} por ${fmt(deuda.monto_total)}? Esta acción solo procede si no tiene aportes ni pagos registrados.`)) return;
+  const res = await fetch(APP_BASE + `/api/deuda-taller/${id}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al eliminar (${res.status})`, true); return; }
+  showToast('Deuda eliminada correctamente');
+  renderDeudasTaller(data.panel);
 }
 
 async function registrarFondoDeuda(id, faltante) {

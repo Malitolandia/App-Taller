@@ -671,9 +671,11 @@ def _frequency(value):
     normalized = normalize_name(value)
     if normalized in {'mensual', 'monthly'}:
         return 'Mensual'
+    if normalized in {'semanal', 'weekly'}:
+        return 'Semanal'
     if normalized in {'', 'unico', 'único', 'unica', 'única', 'pago unico', 'pago único', 'one time'}:
         return 'Único'
-    raise ValueError('La frecuencia debe ser Único o Mensual')
+    raise ValueError('La frecuencia debe ser Único, Semanal o Mensual')
 
 
 def _safe_month_day(year, month, day_number):
@@ -695,6 +697,10 @@ def _monthly_due(day_number, reference=None):
     if candidate < reference:
         candidate = _next_month_day(reference, day_number)
     return candidate
+
+
+def _next_week_day(reference):
+    return reference + timedelta(days=7)
 
 
 def _fondos_deuda(wb):
@@ -762,7 +768,12 @@ def _deuda_records(wb):
             vencimiento = _parse_iso_date(values.get('Próximo Vencimiento'), 'Próximo vencimiento')
         except ValueError:
             vencimiento = hoy
-        periodo = vencimiento.strftime('%Y-%m') if frecuencia == 'Mensual' else 'Único'
+        if frecuencia == 'Mensual':
+            periodo = vencimiento.strftime('%Y-%m')
+        elif frecuencia == 'Semanal':
+            periodo = vencimiento.isoformat()
+        else:
+            periodo = 'Único'
         fondos_deuda = [f for f in fondos if f['deuda_id'] == deuda_id]
         pagos_deuda = [p for p in pagos if p['deuda_id'] == deuda_id]
         fondos_periodo = sum(f['monto'] for f in fondos_deuda if frecuencia == 'Único' or f['periodo'] == periodo)
@@ -775,7 +786,7 @@ def _deuda_records(wb):
         estado_base = str(values.get('Estado') or '').strip()
         if frecuencia == 'Único' and saldo_periodo <= 0.009:
             estado = 'Pagado'
-        elif frecuencia == 'Mensual' and saldo_periodo <= 0.009:
+        elif frecuencia in {'Mensual', 'Semanal'} and saldo_periodo <= 0.009:
             estado = 'Pagado'
         elif vencimiento < hoy:
             estado = 'Atrasado'
@@ -890,7 +901,10 @@ def create_deuda_taller():
                 raise ValueError('El día de pago mensual debe estar entre 1 y 31')
             vencimiento = _monthly_due(dia, registro)
         else:
-            vencimiento = _parse_iso_date(data.get('fecha_vencimiento'), 'La fecha de vencimiento')
+            vencimiento = _parse_iso_date(
+                data.get('fecha_vencimiento'),
+                'La primera fecha semanal' if frecuencia == 'Semanal' else 'La fecha de vencimiento',
+            )
             dia = vencimiento.day
     except (TypeError, ValueError) as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
@@ -907,6 +921,79 @@ def create_deuda_taller():
     wb.save(EXCEL_FILE)
     return jsonify({'success': True, 'id': deuda_id, 'proximo_vencimiento': vencimiento.isoformat(),
                     'panel': _deudas_panel(wb)})
+
+
+@app.route('/api/deuda-taller/<int:deuda_id>', methods=['PUT', 'PATCH'])
+def update_deuda_taller(deuda_id):
+    data = request.json or {}
+    wb = get_wb()
+    actual = _get_deuda_summary(wb, deuda_id)
+    if not actual:
+        return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
+
+    acreedor = ' '.join(str(data.get('acreedor', actual['acreedor']) or '').strip().split())
+    concepto = ' '.join(str(data.get('concepto', actual['concepto']) or '').strip().split())
+    try:
+        monto = round(float(data.get('monto_total', actual['monto_total']) or 0), 2)
+        frecuencia = _frequency(data.get('frecuencia', actual['frecuencia']))
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc) or 'Monto o frecuencia no válidos'}), 400
+    if not acreedor or not concepto or monto <= 0:
+        return jsonify({'success': False, 'error': 'Acreedor, concepto y monto son obligatorios y deben ser válidos'}), 400
+
+    fondos = _fondos_deuda(wb)
+    pagos = _pagos_deuda(wb)
+    tiene_historial = any(x['deuda_id'] == deuda_id for x in fondos + pagos)
+    if tiene_historial and frecuencia != actual['frecuencia']:
+        return jsonify({'success': False, 'error': 'No se puede cambiar la frecuencia de una deuda con fondos o pagos históricos'}), 409
+
+    try:
+        if frecuencia == 'Mensual':
+            dia = int(data.get('dia_pago', actual['dia_pago']) or 0)
+            if dia < 1 or dia > 31:
+                raise ValueError('El día de pago mensual debe estar entre 1 y 31')
+            vencimiento = _monthly_due(dia, date.today()) if ('dia_pago' in data or actual['frecuencia'] != 'Mensual') else _parse_iso_date(actual['proximo_vencimiento'], 'Próximo vencimiento')
+        else:
+            raw_date = data.get('fecha_vencimiento', actual['proximo_vencimiento'])
+            vencimiento = _parse_iso_date(raw_date, 'La primera fecha semanal' if frecuencia == 'Semanal' else 'La fecha de vencimiento')
+            dia = vencimiento.day
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    periodo_actual = actual['periodo']
+    pagos_periodo = sum(p['monto'] for p in pagos if p['deuda_id'] == deuda_id and (actual['frecuencia'] == 'Único' or p['periodo'] == periodo_actual))
+    if monto + 0.009 < pagos_periodo:
+        return jsonify({'success': False, 'error': f'El nuevo monto no puede ser menor que lo pagado en el período ({pagos_periodo:.2f})'}), 400
+
+    ws = wb['Deudas Taller']
+    row = find_row_by_id(ws, deuda_id)
+    headers = SHEET_HEADERS['Deudas Taller']
+    values = {
+        'Acreedor': acreedor, 'Concepto': concepto, 'Monto Total': monto,
+        'Frecuencia': frecuencia, 'Día Pago': dia, 'Próximo Vencimiento': vencimiento.isoformat(),
+        'Estado': 'Pendiente de reunir', 'Observaciones': str(data.get('observaciones', actual['observaciones']) or '').strip(),
+    }
+    for key, value in values.items():
+        ws.cell(row=row[0].row, column=headers.index(key) + 1, value=value)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': deuda_id, 'panel': _deudas_panel(wb)})
+
+
+@app.route('/api/deuda-taller/<int:deuda_id>', methods=['DELETE'])
+def delete_deuda_taller(deuda_id):
+    wb = get_wb()
+    actual = _get_deuda_summary(wb, deuda_id)
+    if not actual:
+        return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
+    if any(x['deuda_id'] == deuda_id for x in _fondos_deuda(wb) + _pagos_deuda(wb)):
+        return jsonify({'success': False, 'error': 'No se puede eliminar una deuda que ya tiene fondos o pagos registrados; edítala o déjala cerrada'}), 409
+    ws = wb['Deudas Taller']
+    row = find_row_by_id(ws, deuda_id)
+    if not row:
+        return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
+    ws.delete_rows(row[0].row, 1)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': deuda_id, 'panel': _deudas_panel(wb)})
 
 
 @app.route('/api/fondo-deuda', methods=['POST'])
@@ -974,9 +1061,12 @@ def create_pago_deuda():
     }, pago_id)
 
     if tipo_pago == 'Total':
+        current_due = _parse_iso_date(deuda['proximo_vencimiento'], 'Próximo vencimiento')
         if deuda['frecuencia'] == 'Mensual':
-            current_due = _parse_iso_date(deuda['proximo_vencimiento'], 'Próximo vencimiento')
             next_due = _next_month_day(current_due, deuda['dia_pago'])
+            _save_deuda_status(wb, deuda_id, 'Pendiente de reunir', next_due.isoformat())
+        elif deuda['frecuencia'] == 'Semanal':
+            next_due = _next_week_day(current_due)
             _save_deuda_status(wb, deuda_id, 'Pendiente de reunir', next_due.isoformat())
         else:
             _save_deuda_status(wb, deuda_id, 'Pagado')
