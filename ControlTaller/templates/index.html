@@ -140,6 +140,7 @@
   <div class="tab" data-tab="mecanicos">Mecánicos</div>
   <div class="tab" data-tab="trabajos">Trabajos / Nómina</div>
   <div class="tab" data-tab="prestamos">Préstamos / Descuentos</div>
+  <div class="tab" data-tab="deudas">Deudas del Taller</div>
   <div class="tab" data-tab="gastos">Gastos</div>
   <div class="tab" data-tab="herramientas">Herramientas</div>
 </div>
@@ -361,6 +362,70 @@
   </div>
 </div>
 
+<!-- ================= DEUDAS DEL TALLER ================= -->
+<div class="panel" id="panel-deudas">
+  <div class="card">
+    <div class="card-header">REGISTRAR DEUDA DEL TALLER</div>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:12px">La fecha de registro se asigna automáticamente. Puedes indicar una fecha única o un día de pago que se repite cada mes.</p>
+      <div class="form-grid">
+        <div class="form-group"><label>A quién se le debe</label><input id="dtAcreedor" placeholder="Ej. Proveedor, arrendador o persona"></div>
+        <div class="form-group"><label>Concepto</label><input id="dtConcepto" placeholder="Ej. Repuestos, arriendo o servicio"></div>
+        <div class="form-group"><label>Monto total</label><input id="dtMonto" type="number" min="0.01" step="0.01" placeholder="0"></div>
+        <div class="form-group"><label>Frecuencia de pago</label><select id="dtFrecuencia" onchange="cambiarFrecuenciaDeuda()"><option value="Mensual">Mensual</option><option value="Único">Pago único</option></select></div>
+        <div class="form-group" id="dtDiaWrap"><label>Día de pago mensual</label><input id="dtDiaPago" type="number" min="1" max="31" step="1" placeholder="15"></div>
+        <div class="form-group" id="dtFechaWrap" style="display:none"><label>Fecha de vencimiento</label><input id="dtFechaVencimiento" type="date"></div>
+        <div class="form-group full"><label>Observaciones</label><input id="dtObservaciones" placeholder="Opcional"></div>
+      </div>
+      <div class="form-actions"><button class="btn btn-red" onclick="crearDeudaTaller()">+ Registrar deuda</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">RESUMEN DE COMPROMISOS</div>
+    <div class="card-body">
+      <div class="kpi-grid">
+        <div class="kpi blue"><div class="label">Saldo por pagar</div><div class="value" id="dtComprometido">$0</div></div>
+        <div class="kpi green"><div class="label">Dinero en bolsillos</div><div class="value" id="dtFondos">$0</div></div>
+        <div class="kpi orange"><div class="label">Faltante por reunir</div><div class="value" id="dtFaltante">$0</div></div>
+        <div class="kpi"><div class="label">Próximos / atrasados</div><div class="value" id="dtAlertas">0 / 0</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">BOLSILLOS Y SALDOS DE CADA DEUDA</div>
+    <div class="card-body">
+      <div class="mec-cards" id="deudaTallerCards"><p class="hint">Aún no hay deudas registradas.</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">CALENDARIO DE PAGOS Y RECORDATORIOS</div>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:12px">Los avisos se calculan con la fecha actual: vencido, próximo en siete días, listo para pagar o pendiente de reunir.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>A quién</th><th>Concepto</th><th>Saldo</th><th>En bolsillo</th><th>Faltante</th><th>Recordatorio</th></tr></thead>
+          <tbody id="tblCalendarioDeudas"><tr class="empty-row"><td colspan="7">Sin compromisos registrados</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">HISTORIAL DE APORTES Y PAGOS</div>
+    <div class="card-body">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tipo</th><th>Fecha</th><th>A quién</th><th>Período</th><th>Monto</th><th>Detalle</th></tr></thead>
+          <tbody id="tblMovimientosDeudas"><tr class="empty-row"><td colspan="6">Sin movimientos registrados</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ================= GASTOS ================= -->
 <div class="panel" id="panel-gastos">
   <div class="card">
@@ -495,6 +560,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'mecanicos') { cargarMecanicos(); cargarEquipos(); }
     if (tab.dataset.tab === 'trabajos') { cargarMecanicosSelect(); cargarEquiposSelect(); cargarNomina(); cargarTrabajos(); }
     if (tab.dataset.tab === 'prestamos') { cargarPrestamoMecanicos(); cargarPanelPrestamos(); }
+    if (tab.dataset.tab === 'deudas') cargarPanelDeudas();
     if (tab.dataset.tab === 'gastos') cargarGastos();
     if (tab.dataset.tab === 'herramientas') { cargarHerramientasSelectMec(); cargarHerramientas(); }
   });
@@ -1081,6 +1147,130 @@ async function pagarNominaPeriodo(mecanicoEncoded, semanaEncoded) {
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar el pago (${res.status})`, true); return; }
   showToast(`Pago registrado: ${fmt(data.neto_pagado)} neto`);
   cargarPanelPrestamos(); cargarNomina(); cargarResumen();
+}
+
+// ---------- Deudas del Taller ----------
+let panelDeudasData = { deudas: [], fondos: [], pagos: [], calendario: [], totales: {} };
+
+function cambiarFrecuenciaDeuda() {
+  const mensual = document.getElementById('dtFrecuencia').value === 'Mensual';
+  document.getElementById('dtDiaWrap').style.display = mensual ? '' : 'none';
+  document.getElementById('dtFechaWrap').style.display = mensual ? 'none' : '';
+}
+
+function estadoRecordatorio(item) {
+  if (item.estado === 'Pagado') return '<span class="badge badge-pagado">Pagado</span>';
+  if (item.dias < 0) return `<span class="badge badge-pendiente">Vencido hace ${Math.abs(item.dias)} día(s)</span>`;
+  if (item.dias <= 7) return `<span class="badge badge-pendiente">Pagar en ${item.dias} día(s)</span>`;
+  if (item.estado === 'Listo para pagar') return '<span class="badge badge-pagado">Listo para pagar</span>';
+  return '<span class="badge badge-pendiente">Pendiente de reunir</span>';
+}
+
+function renderDeudasTaller(data) {
+  panelDeudasData = data;
+  const totals = data.totales || {};
+  document.getElementById('dtComprometido').textContent = fmt(totals.comprometido);
+  document.getElementById('dtFondos').textContent = fmt(totals.fondos_disponibles);
+  document.getElementById('dtFaltante').textContent = fmt(totals.faltante_reunir);
+  document.getElementById('dtAlertas').textContent = `${totals.proximos || 0} / ${totals.atrasados || 0}`;
+
+  const cards = document.getElementById('deudaTallerCards');
+  const deudas = data.deudas || [];
+  if (!deudas.length) {
+    cards.innerHTML = '<p class="hint">Aún no hay deudas registradas.</p>';
+  } else {
+    cards.innerHTML = deudas.map(d => `
+      <div class="mec-card ${d.estado === 'Pagado' ? 'toggle-inactive' : ''}">
+        <h4>${escHtml(d.acreedor)} <span class="badge ${d.estado === 'Pagado' ? 'badge-pagado' : 'badge-pendiente'}">${escHtml(d.estado)}</span></h4>
+        <div class="mec-row"><span>Concepto</span><span>${escHtml(d.concepto)}</span></div>
+        <div class="mec-row"><span>Saldo por pagar</span><strong>${fmt(d.saldo_pendiente)}</strong></div>
+        <div class="mec-row"><span>En bolsillo</span><span style="color:var(--green)">${fmt(d.fondo_disponible)}</span></div>
+        <div class="mec-row"><span>Falta reunir</span><span style="color:var(--orange)">${fmt(d.faltante_reunir)}</span></div>
+        <div class="mec-row"><span>Próximo pago</span><span>${escHtml(d.proximo_vencimiento)} (${escHtml(d.frecuencia)})</span></div>
+        ${d.observaciones ? `<div class="hint">${escHtml(d.observaciones)}</div>` : ''}
+        <div class="actions">
+          ${d.estado !== 'Pagado' && d.faltante_reunir > 0 ? `<button class="btn btn-xs btn-gray" onclick="registrarFondoDeuda(${d.id}, ${d.faltante_reunir})">+ Aportar al bolsillo</button>` : ''}
+          ${d.estado !== 'Pagado' ? `<button class="btn btn-xs btn-green" onclick="pagarDeudaTaller(${d.id}, ${d.saldo_pendiente}, ${d.fondo_disponible})">Registrar pago</button>` : ''}
+        </div>
+      </div>`).join('');
+  }
+
+  const calendario = document.getElementById('tblCalendarioDeudas');
+  const items = data.calendario || [];
+  calendario.innerHTML = items.length ? items.map(item => `
+    <tr>
+      <td><strong>${escHtml(item.fecha)}</strong></td>
+      <td>${escHtml(item.acreedor)}</td>
+      <td>${escHtml(item.concepto)}</td>
+      <td>${fmt(item.monto)}</td>
+      <td style="color:var(--green)">${fmt(item.fondos)}</td>
+      <td style="color:var(--orange)">${fmt(item.faltante)}</td>
+      <td>${estadoRecordatorio(item)}</td>
+    </tr>`).join('') : '<tr class="empty-row"><td colspan="7">Sin compromisos registrados</td></tr>';
+
+  const movements = [
+    ...(data.fondos || []).map(f => ({ tipo: 'Aporte', fecha: f.fecha, acreedor: f.acreedor, periodo: f.periodo, monto: f.monto, detalle: f.metodo || f.observaciones || 'Dinero apartado' })),
+    ...(data.pagos || []).map(p => ({ tipo: `Pago ${p.tipo_pago || ''}`.trim(), fecha: p.fecha, acreedor: p.acreedor, periodo: p.periodo, monto: p.monto, detalle: p.observaciones || 'Pago registrado' })),
+  ].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const movementBody = document.getElementById('tblMovimientosDeudas');
+  movementBody.innerHTML = movements.length ? movements.map(m => `
+    <tr><td>${escHtml(m.tipo)}</td><td>${escHtml(m.fecha)}</td><td>${escHtml(m.acreedor)}</td>
+    <td>${escHtml(m.periodo)}</td><td><strong>${fmt(m.monto)}</strong></td><td>${escHtml(m.detalle)}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="6">Sin movimientos registrados</td></tr>';
+}
+
+async function cargarPanelDeudas() {
+  const res = await fetch(APP_BASE + '/api/deudas-taller/panel', { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false) { showToast(data.error || `Error al cargar deudas (${res.status})`, true); return; }
+  renderDeudasTaller(data);
+}
+
+async function crearDeudaTaller() {
+  const acreedor = document.getElementById('dtAcreedor').value.trim();
+  const concepto = document.getElementById('dtConcepto').value.trim();
+  const monto = Number(document.getElementById('dtMonto').value || 0);
+  const frecuencia = document.getElementById('dtFrecuencia').value;
+  const dia = Number(document.getElementById('dtDiaPago').value || 0);
+  const fecha = document.getElementById('dtFechaVencimiento').value;
+  if (!acreedor || !concepto || monto <= 0) { showToast('Completa acreedor, concepto y un monto válido', true); return; }
+  if (frecuencia === 'Mensual' && (!Number.isInteger(dia) || dia < 1 || dia > 31)) { showToast('Indica un día mensual entre 1 y 31', true); return; }
+  if (frecuencia !== 'Mensual' && !fecha) { showToast('Indica la fecha de vencimiento', true); return; }
+  if (!confirm(`¿Registrar deuda de ${fmt(monto)} a ${acreedor}?`)) return;
+  const res = await fetch(APP_BASE + '/api/deuda-taller', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+    acreedor, concepto, monto_total: monto, frecuencia, dia_pago: dia, fecha_vencimiento: fecha,
+    observaciones: document.getElementById('dtObservaciones').value,
+  }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar (${res.status})`, true); return; }
+  ['dtAcreedor','dtConcepto','dtMonto','dtDiaPago','dtFechaVencimiento','dtObservaciones'].forEach(id => document.getElementById(id).value = '');
+  showToast('Deuda registrada correctamente');
+  cargarPanelDeudas();
+}
+
+async function registrarFondoDeuda(id, faltante) {
+  const monto = Number(prompt(`¿Cuánto dinero deseas apartar? Faltan ${fmt(faltante)}.`, faltante) || 0);
+  if (!Number.isFinite(monto) || monto <= 0) { showToast('El aporte debe ser mayor que cero', true); return; }
+  if (monto > faltante + 0.009) { showToast('El aporte no puede superar el faltante', true); return; }
+  if (!confirm(`¿Registrar aporte de ${fmt(monto)} al bolsillo?`)) return;
+  const res = await fetch(APP_BASE + '/api/fondo-deuda', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ deuda_id: id, monto }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar aporte (${res.status})`, true); return; }
+  showToast('Aporte registrado en el bolsillo');
+  renderDeudasTaller(data.panel);
+}
+
+async function pagarDeudaTaller(id, saldo, fondo) {
+  if (fondo <= 0) { showToast('Primero debes reunir dinero en el bolsillo', true); return; }
+  const maximo = Math.min(saldo, fondo);
+  const monto = Number(prompt(`Monto a pagar. Puedes pagar hasta ${fmt(maximo)}.`, maximo) || 0);
+  if (!Number.isFinite(monto) || monto <= 0) { showToast('El pago debe ser mayor que cero', true); return; }
+  if (monto > maximo + 0.009) { showToast('El pago no puede superar el saldo o el dinero del bolsillo', true); return; }
+  if (!confirm(`¿Registrar pago de ${fmt(monto)}?`)) return;
+  const res = await fetch(APP_BASE + '/api/pago-deuda', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ deuda_id: id, monto }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) { showToast(data.error || `Error al registrar pago (${res.status})`, true); return; }
+  showToast(data.tipo_pago === 'Total' ? 'Deuda pagada y cerrada' : 'Pago parcial registrado');
+  renderDeudasTaller(data.panel);
 }
 
 // ---------- Gastos ----------

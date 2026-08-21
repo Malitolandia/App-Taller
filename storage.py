@@ -44,6 +44,16 @@ CONTROL_HEADERS = {
         "ID", "Fecha Aplicación", "Mecánico", "Semana", "Concepto", "Monto",
         "Préstamo ID", "Observaciones",
     ],
+    "Deudas Taller": [
+        "ID", "Fecha Registro", "Acreedor", "Concepto", "Monto Total", "Frecuencia",
+        "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones",
+    ],
+    "Fondos Deudas": [
+        "ID", "Fecha Aporte", "Deuda ID", "Período", "Acreedor", "Monto", "Método", "Observaciones",
+    ],
+    "Pagos Deudas": [
+        "ID", "Fecha Pago", "Deuda ID", "Período", "Acreedor", "Monto", "Tipo Pago", "Observaciones",
+    ],
     "Herramientas": [
         "ID", "Herramienta", "Prestada A", "Entregada Por", "Fecha Préstamo",
         "Fecha Devolución", "Estado", "Observaciones",

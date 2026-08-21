@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.exceptions import HTTPException
 import os
 import io
-from datetime import datetime
+from datetime import date, datetime, timedelta
+import calendar
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -39,6 +40,10 @@ SHEET_HEADERS = {
                   "Total Descontado", "Saldo Pendiente", "Estado", "Observaciones"],
     "Descuentos Nomina": ["ID", "Fecha Aplicación", "Mecánico", "Semana", "Concepto",
                           "Monto", "Préstamo ID", "Observaciones"],
+    "Deudas Taller": ["ID", "Fecha Registro", "Acreedor", "Concepto", "Monto Total", "Frecuencia",
+                      "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones"],
+    "Fondos Deudas": ["ID", "Fecha Aporte", "Deuda ID", "Período", "Acreedor", "Monto", "Método", "Observaciones"],
+    "Pagos Deudas": ["ID", "Fecha Pago", "Deuda ID", "Período", "Acreedor", "Monto", "Tipo Pago", "Observaciones"],
     "Herramientas": ["ID", "Herramienta", "Prestada A", "Entregada Por", "Fecha Préstamo",
                       "Fecha Devolución", "Estado", "Observaciones"],
 }
@@ -642,6 +647,344 @@ def delete_prestamo(pid):
     ws.delete_rows(row[0].row, 1)
     wb.save(EXCEL_FILE)
     return jsonify({'success': True})
+
+
+# ---------------------------------------------------------------------------
+# API Deudas del Taller, fondos y pagos
+# ---------------------------------------------------------------------------
+
+def _parse_iso_date(value, field='fecha'):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or '').strip()
+    if not text:
+        raise ValueError(f'{field} es obligatoria')
+    try:
+        return datetime.strptime(text[:10], '%Y-%m-%d').date()
+    except ValueError as exc:
+        raise ValueError(f'{field} debe tener formato AAAA-MM-DD') from exc
+
+
+def _frequency(value):
+    normalized = normalize_name(value)
+    if normalized in {'mensual', 'monthly'}:
+        return 'Mensual'
+    if normalized in {'', 'unico', 'único', 'unica', 'única', 'pago unico', 'pago único', 'one time'}:
+        return 'Único'
+    raise ValueError('La frecuencia debe ser Único o Mensual')
+
+
+def _safe_month_day(year, month, day_number):
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(int(day_number), last_day))
+
+
+def _next_month_day(base_date, day_number):
+    if base_date.month == 12:
+        year, month = base_date.year + 1, 1
+    else:
+        year, month = base_date.year, base_date.month + 1
+    return _safe_month_day(year, month, day_number)
+
+
+def _monthly_due(day_number, reference=None):
+    reference = reference or date.today()
+    candidate = _safe_month_day(reference.year, reference.month, day_number)
+    if candidate < reference:
+        candidate = _next_month_day(reference, day_number)
+    return candidate
+
+
+def _fondos_deuda(wb):
+    ws = wb['Fondos Deudas']
+    headers = SHEET_HEADERS['Fondos Deudas']
+    records = []
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        raw_debt = values.get('Deuda ID')
+        records.append({
+            'id': int(values.get('ID') or 0),
+            'fecha': values.get('Fecha Aporte') or '',
+            'deuda_id': int(raw_debt) if str(raw_debt or '').strip().isdigit() else None,
+            'periodo': str(values.get('Período') or '').strip(),
+            'acreedor': values.get('Acreedor') or '',
+            'monto': money(values.get('Monto')),
+            'metodo': values.get('Método') or '',
+            'observaciones': values.get('Observaciones') or '',
+        })
+    return records
+
+
+def _pagos_deuda(wb):
+    ws = wb['Pagos Deudas']
+    headers = SHEET_HEADERS['Pagos Deudas']
+    records = []
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        raw_debt = values.get('Deuda ID')
+        records.append({
+            'id': int(values.get('ID') or 0),
+            'fecha': values.get('Fecha Pago') or '',
+            'deuda_id': int(raw_debt) if str(raw_debt or '').strip().isdigit() else None,
+            'periodo': str(values.get('Período') or '').strip(),
+            'acreedor': values.get('Acreedor') or '',
+            'monto': money(values.get('Monto')),
+            'tipo_pago': values.get('Tipo Pago') or '',
+            'observaciones': values.get('Observaciones') or '',
+        })
+    return records
+
+
+def _deuda_records(wb):
+    ws = wb['Deudas Taller']
+    headers = SHEET_HEADERS['Deudas Taller']
+    fondos = _fondos_deuda(wb)
+    pagos = _pagos_deuda(wb)
+    hoy = date.today()
+    records = []
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value is None:
+            continue
+        values = _row_values(row, headers)
+        deuda_id = int(values.get('ID') or 0)
+        try:
+            frecuencia = _frequency(values.get('Frecuencia'))
+        except ValueError:
+            frecuencia = 'Único'
+        monto_total = money(values.get('Monto Total'))
+        try:
+            vencimiento = _parse_iso_date(values.get('Próximo Vencimiento'), 'Próximo vencimiento')
+        except ValueError:
+            vencimiento = hoy
+        periodo = vencimiento.strftime('%Y-%m') if frecuencia == 'Mensual' else 'Único'
+        fondos_deuda = [f for f in fondos if f['deuda_id'] == deuda_id]
+        pagos_deuda = [p for p in pagos if p['deuda_id'] == deuda_id]
+        fondos_periodo = sum(f['monto'] for f in fondos_deuda if frecuencia == 'Único' or f['periodo'] == periodo)
+        pagos_periodo = sum(p['monto'] for p in pagos_deuda if frecuencia == 'Único' or p['periodo'] == periodo)
+        aportado_total = round(sum(f['monto'] for f in fondos_deuda), 2)
+        pagado_total = round(sum(p['monto'] for p in pagos_deuda), 2)
+        saldo_periodo = round(max(monto_total - pagos_periodo, 0.0), 2)
+        fondo_disponible = round(max(fondos_periodo - pagos_periodo, 0.0), 2)
+        faltante = round(max(saldo_periodo - fondo_disponible, 0.0), 2)
+        estado_base = str(values.get('Estado') or '').strip()
+        if frecuencia == 'Único' and saldo_periodo <= 0.009:
+            estado = 'Pagado'
+        elif frecuencia == 'Mensual' and saldo_periodo <= 0.009:
+            estado = 'Pagado'
+        elif vencimiento < hoy:
+            estado = 'Atrasado'
+        elif fondo_disponible >= saldo_periodo and saldo_periodo > 0:
+            estado = 'Listo para pagar'
+        else:
+            estado = 'Pendiente de reunir'
+        if estado_base == 'Pagado' and frecuencia == 'Único' and saldo_periodo <= 0.009:
+            estado = 'Pagado'
+        records.append({
+            'id': deuda_id,
+            'fecha_registro': values.get('Fecha Registro') or '',
+            'acreedor': values.get('Acreedor') or '',
+            'concepto': values.get('Concepto') or '',
+            'monto_total': monto_total,
+            'frecuencia': frecuencia,
+            'dia_pago': int(values.get('Día Pago') or vencimiento.day),
+            'proximo_vencimiento': vencimiento.isoformat(),
+            'periodo': periodo,
+            'estado': estado,
+            'observaciones': values.get('Observaciones') or '',
+            'fondos_aportados': aportado_total,
+            'fondo_disponible': fondo_disponible,
+            'pagado_total': pagado_total,
+            'saldo_pendiente': saldo_periodo,
+            'faltante_reunir': faltante,
+            'fondos_periodo': round(fondos_periodo, 2),
+            'pagado_periodo': round(pagos_periodo, 2),
+        })
+    return records
+
+
+def _deudas_panel(wb):
+    deudas = _deuda_records(wb)
+    fondos = _fondos_deuda(wb)
+    pagos = _pagos_deuda(wb)
+    hoy = date.today()
+    calendario = []
+    for deuda in deudas:
+        vencimiento = _parse_iso_date(deuda['proximo_vencimiento'], 'Próximo vencimiento')
+        calendario.append({
+            'deuda_id': deuda['id'],
+            'acreedor': deuda['acreedor'],
+            'concepto': deuda['concepto'],
+            'monto': deuda['saldo_pendiente'],
+            'fondos': deuda['fondo_disponible'],
+            'faltante': deuda['faltante_reunir'],
+            'fecha': vencimiento.isoformat(),
+            'dias': (vencimiento - hoy).days,
+            'estado': deuda['estado'],
+        })
+    calendario.sort(key=lambda item: (item['fecha'], item['acreedor']))
+    return {
+        'deudas': deudas,
+        'fondos': fondos,
+        'pagos': pagos,
+        'calendario': calendario,
+        'hoy': hoy.isoformat(),
+        'totales': {
+            'comprometido': round(sum(d['saldo_pendiente'] for d in deudas if d['estado'] != 'Pagado'), 2),
+            'fondos_disponibles': round(sum(d['fondo_disponible'] for d in deudas if d['estado'] != 'Pagado'), 2),
+            'faltante_reunir': round(sum(d['faltante_reunir'] for d in deudas if d['estado'] != 'Pagado'), 2),
+            'proximos': sum(1 for item in calendario if 0 <= item['dias'] <= 7 and item['estado'] != 'Pagado'),
+            'atrasados': sum(1 for item in calendario if item['dias'] < 0 and item['estado'] != 'Pagado'),
+        },
+    }
+
+
+def _get_deuda_summary(wb, deuda_id):
+    return next((d for d in _deuda_records(wb) if d['id'] == deuda_id), None)
+
+
+def _save_deuda_status(wb, deuda_id, estado=None, proximo_vencimiento=None):
+    ws = wb['Deudas Taller']
+    row = find_row_by_id(ws, deuda_id)
+    if not row:
+        return
+    headers = SHEET_HEADERS['Deudas Taller']
+    if estado is not None:
+        ws.cell(row=row[0].row, column=headers.index('Estado') + 1, value=estado)
+    if proximo_vencimiento is not None:
+        ws.cell(row=row[0].row, column=headers.index('Próximo Vencimiento') + 1, value=proximo_vencimiento)
+
+
+@app.route('/api/deudas-taller', methods=['GET'])
+def list_deudas_taller():
+    return jsonify(_deudas_panel(get_wb()))
+
+
+@app.route('/api/deudas-taller/panel', methods=['GET'])
+def deudas_taller_panel():
+    return jsonify(_deudas_panel(get_wb()))
+
+
+@app.route('/api/deuda-taller', methods=['POST'])
+def create_deuda_taller():
+    data = request.json or {}
+    acreedor = ' '.join(str(data.get('acreedor') or '').strip().split())
+    concepto = ' '.join(str(data.get('concepto') or '').strip().split())
+    try:
+        monto = round(float(data.get('monto_total') or 0), 2)
+        frecuencia = _frequency(data.get('frecuencia'))
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc) or 'Monto o frecuencia no válidos'}), 400
+    if not acreedor or not concepto or monto <= 0:
+        return jsonify({'success': False, 'error': 'Acreedor, concepto y monto son obligatorios y deben ser válidos'}), 400
+    registro = date.today()
+    try:
+        if frecuencia == 'Mensual':
+            dia = int(data.get('dia_pago') or 0)
+            if dia < 1 or dia > 31:
+                raise ValueError('El día de pago mensual debe estar entre 1 y 31')
+            vencimiento = _monthly_due(dia, registro)
+        else:
+            vencimiento = _parse_iso_date(data.get('fecha_vencimiento'), 'La fecha de vencimiento')
+            dia = vencimiento.day
+    except (TypeError, ValueError) as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    wb = get_wb()
+    ws = wb['Deudas Taller']
+    deuda_id = next_id(ws)
+    append_row(ws, SHEET_HEADERS['Deudas Taller'], {
+        'ID': deuda_id, 'Fecha Registro': registro.isoformat(), 'Acreedor': acreedor,
+        'Concepto': concepto, 'Monto Total': monto, 'Frecuencia': frecuencia,
+        'Día Pago': dia, 'Próximo Vencimiento': vencimiento.isoformat(),
+        'Estado': 'Pendiente de reunir', 'Observaciones': (data.get('observaciones') or '').strip(),
+    }, deuda_id)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': deuda_id, 'proximo_vencimiento': vencimiento.isoformat(),
+                    'panel': _deudas_panel(wb)})
+
+
+@app.route('/api/fondo-deuda', methods=['POST'])
+def create_fondo_deuda():
+    data = request.json or {}
+    try:
+        deuda_id = int(data.get('deuda_id') or 0)
+        monto = round(float(data.get('monto') or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'La deuda y el monto deben ser válidos'}), 400
+    if deuda_id <= 0 or monto <= 0:
+        return jsonify({'success': False, 'error': 'La deuda y el monto deben ser mayores que cero'}), 400
+    wb = get_wb()
+    deuda = _get_deuda_summary(wb, deuda_id)
+    if not deuda:
+        return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
+    if monto > deuda['faltante_reunir'] + 0.009:
+        return jsonify({'success': False, 'error': f'El aporte supera el faltante por reunir ({deuda["faltante_reunir"]:.2f})'}), 400
+    ws = wb['Fondos Deudas']
+    fondo_id = next_id(ws)
+    fecha = data.get('fecha') or date.today().isoformat()
+    try:
+        fecha = _parse_iso_date(fecha, 'La fecha del aporte').isoformat()
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    append_row(ws, SHEET_HEADERS['Fondos Deudas'], {
+        'ID': fondo_id, 'Fecha Aporte': fecha, 'Deuda ID': deuda_id,
+        'Período': deuda['periodo'], 'Acreedor': deuda['acreedor'], 'Monto': monto,
+        'Método': (data.get('metodo') or '').strip(), 'Observaciones': (data.get('observaciones') or '').strip(),
+    }, fondo_id)
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': fondo_id, 'panel': _deudas_panel(wb)})
+
+
+@app.route('/api/pago-deuda', methods=['POST'])
+def create_pago_deuda():
+    data = request.json or {}
+    try:
+        deuda_id = int(data.get('deuda_id') or 0)
+        monto = round(float(data.get('monto') or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'La deuda y el monto deben ser válidos'}), 400
+    if deuda_id <= 0 or monto <= 0:
+        return jsonify({'success': False, 'error': 'La deuda y el monto deben ser mayores que cero'}), 400
+    wb = get_wb()
+    deuda = _get_deuda_summary(wb, deuda_id)
+    if not deuda:
+        return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
+    if monto > deuda['saldo_pendiente'] + 0.009:
+        return jsonify({'success': False, 'error': f'El pago supera el saldo pendiente ({deuda["saldo_pendiente"]:.2f})'}), 400
+    if monto > deuda['fondo_disponible'] + 0.009:
+        return jsonify({'success': False, 'error': f'El bolsillo disponible no alcanza ({deuda["fondo_disponible"]:.2f})'}), 400
+    tipo_pago = 'Total' if monto >= deuda['saldo_pendiente'] - 0.009 else 'Parcial'
+    ws = wb['Pagos Deudas']
+    pago_id = next_id(ws)
+    fecha = data.get('fecha') or date.today().isoformat()
+    try:
+        fecha = _parse_iso_date(fecha, 'La fecha del pago').isoformat()
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    append_row(ws, SHEET_HEADERS['Pagos Deudas'], {
+        'ID': pago_id, 'Fecha Pago': fecha, 'Deuda ID': deuda_id,
+        'Período': deuda['periodo'], 'Acreedor': deuda['acreedor'], 'Monto': monto,
+        'Tipo Pago': tipo_pago, 'Observaciones': (data.get('observaciones') or '').strip(),
+    }, pago_id)
+
+    if tipo_pago == 'Total':
+        if deuda['frecuencia'] == 'Mensual':
+            current_due = _parse_iso_date(deuda['proximo_vencimiento'], 'Próximo vencimiento')
+            next_due = _next_month_day(current_due, deuda['dia_pago'])
+            _save_deuda_status(wb, deuda_id, 'Pendiente de reunir', next_due.isoformat())
+        else:
+            _save_deuda_status(wb, deuda_id, 'Pagado')
+    else:
+        _save_deuda_status(wb, deuda_id, 'Pendiente de reunir')
+    wb.save(EXCEL_FILE)
+    return jsonify({'success': True, 'id': pago_id, 'tipo_pago': tipo_pago,
+                    'panel': _deudas_panel(wb)})
 
 
 @app.route('/api/nomina/descuento', methods=['POST'])
