@@ -819,13 +819,28 @@ def _deuda_records(wb):
     return records
 
 
+def _payment_month(fecha):
+    """Devuelve YYYY-MM para una fecha de pago remota o local."""
+    if isinstance(fecha, (date, datetime)):
+        return fecha.strftime('%Y-%m')
+    text = str(fecha or '').strip()
+    return text[:7] if len(text) >= 7 and text[4] == '-' and text[5:7].isdigit() else ''
+
+
 def _deudas_panel(wb):
     deudas = _deuda_records(wb)
     fondos = _fondos_deuda(wb)
     pagos = _pagos_deuda(wb)
     hoy = date.today()
+    mes_actual = hoy.strftime('%Y-%m')
+    # Las deudas únicas pagadas dejan de ser compromisos activos, pero siguen
+    # en `deudas` y en `pagos` para conservar el registro histórico.
+    deudas_activas = [
+        d for d in deudas
+        if not (d['frecuencia'] == 'Único' and d['estado'] == 'Pagado')
+    ]
     calendario = []
-    for deuda in deudas:
+    for deuda in deudas_activas:
         vencimiento = _parse_iso_date(deuda['proximo_vencimiento'], 'Próximo vencimiento')
         calendario.append({
             'deuda_id': deuda['id'],
@@ -839,18 +854,38 @@ def _deudas_panel(wb):
             'estado': deuda['estado'],
         })
     calendario.sort(key=lambda item: (item['fecha'], item['acreedor']))
+
+    balance = {}
+    for pago in pagos:
+        mes = _payment_month(pago.get('fecha'))
+        if not mes:
+            continue
+        item = balance.setdefault(mes, {'mes': mes, 'pagado': 0.0, 'operaciones': 0})
+        item['pagado'] = round(item['pagado'] + pago['monto'], 2)
+        item['operaciones'] += 1
+    balance_mensual = sorted(balance.values(), key=lambda item: item['mes'], reverse=True)
+    pagado_total = round(sum(p['monto'] for p in pagos), 2)
+    pagado_mes = round(sum(p['monto'] for p in pagos if _payment_month(p.get('fecha')) == mes_actual), 2)
+    falta_pagar = round(sum(d['saldo_pendiente'] for d in deudas if d['estado'] != 'Pagado'), 2)
+
     return {
         'deudas': deudas,
+        'deudas_activas': deudas_activas,
         'fondos': fondos,
         'pagos': pagos,
+        'balance_mensual': balance_mensual,
         'calendario': calendario,
         'hoy': hoy.isoformat(),
         'totales': {
-            'comprometido': round(sum(d['saldo_pendiente'] for d in deudas if d['estado'] != 'Pagado'), 2),
-            'fondos_disponibles': round(sum(d['fondo_disponible'] for d in deudas if d['estado'] != 'Pagado'), 2),
-            'faltante_reunir': round(sum(d['faltante_reunir'] for d in deudas if d['estado'] != 'Pagado'), 2),
-            'proximos': sum(1 for item in calendario if 0 <= item['dias'] <= 7 and item['estado'] != 'Pagado'),
-            'atrasados': sum(1 for item in calendario if item['dias'] < 0 and item['estado'] != 'Pagado'),
+            'comprometido': falta_pagar,
+            'faltante_pagar': falta_pagar,
+            'pagado_total': pagado_total,
+            'pagado_mes': pagado_mes,
+            'mes_actual': mes_actual,
+            'fondos_disponibles': round(sum(d['fondo_disponible'] for d in deudas_activas), 2),
+            'faltante_reunir': round(sum(d['faltante_reunir'] for d in deudas_activas), 2),
+            'proximos': sum(1 for item in calendario if 0 <= item['dias'] <= 7),
+            'atrasados': sum(1 for item in calendario if item['dias'] < 0),
         },
     }
 

@@ -382,14 +382,16 @@
   </div>
 
   <div class="card">
-    <div class="card-header">RESUMEN DE COMPROMISOS</div>
+    <div class="card-header">RESUMEN DE COMPROMISOS Y PAGOS REALES</div>
     <div class="card-body">
       <div class="kpi-grid">
-        <div class="kpi blue"><div class="label">Saldo por pagar</div><div class="value" id="dtComprometido">$0</div></div>
-        <div class="kpi green"><div class="label">Dinero en bolsillos</div><div class="value" id="dtFondos">$0</div></div>
+        <div class="kpi blue"><div class="label">Falta por pagar</div><div class="value" id="dtComprometido">$0</div></div>
+        <div class="kpi green"><div class="label">Total pagado</div><div class="value" id="dtPagadoTotal">$0</div></div>
+        <div class="kpi green"><div class="label">Pagado este mes</div><div class="value" id="dtPagadoMes">$0</div></div>
         <div class="kpi orange"><div class="label">Faltante por reunir</div><div class="value" id="dtFaltante">$0</div></div>
         <div class="kpi"><div class="label">Próximos / atrasados</div><div class="value" id="dtAlertas">0 / 0</div></div>
       </div>
+      <p class="hint">El total pagado y el balance mensual se calculan únicamente con registros de pago. El dinero apartado en bolsillos se muestra por separado en cada deuda.</p>
     </div>
   </div>
 
@@ -414,12 +416,25 @@
   </div>
 
   <div class="card">
-    <div class="card-header">HISTORIAL DE APORTES Y PAGOS</div>
+    <div class="card-header">BALANCE MENSUAL DE PAGOS</div>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:12px">Este balance incluye únicamente pagos efectivamente registrados, no aportes al bolsillo.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mes</th><th>Operaciones</th><th>Total pagado</th></tr></thead>
+          <tbody id="tblBalanceMensualDeudas"><tr class="empty-row"><td colspan="3">Sin pagos registrados</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">REGISTRO DE PAGOS</div>
     <div class="card-body">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Tipo</th><th>Fecha</th><th>A quién</th><th>Período</th><th>Monto</th><th>Detalle</th></tr></thead>
-          <tbody id="tblMovimientosDeudas"><tr class="empty-row"><td colspan="6">Sin movimientos registrados</td></tr></tbody>
+          <thead><tr><th>Tipo</th><th>Fecha</th><th>A quién</th><th>Período</th><th>Monto pagado</th><th>Detalle</th></tr></thead>
+          <tbody id="tblMovimientosDeudas"><tr class="empty-row"><td colspan="6">Sin pagos registrados</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1172,15 +1187,19 @@ function estadoRecordatorio(item) {
 function renderDeudasTaller(data) {
   panelDeudasData = data;
   const totals = data.totales || {};
-  document.getElementById('dtComprometido').textContent = fmt(totals.comprometido);
+  document.getElementById('dtComprometido').textContent = fmt(totals.faltante_pagar ?? totals.comprometido);
+  document.getElementById('dtPagadoTotal').textContent = fmt(totals.pagado_total || 0);
+  document.getElementById('dtPagadoMes').textContent = fmt(totals.pagado_mes || 0);
   document.getElementById('dtFondos').textContent = fmt(totals.fondos_disponibles);
   document.getElementById('dtFaltante').textContent = fmt(totals.faltante_reunir);
   document.getElementById('dtAlertas').textContent = `${totals.proximos || 0} / ${totals.atrasados || 0}`;
 
   const cards = document.getElementById('deudaTallerCards');
-  const deudas = data.deudas || [];
+  // La cuadrícula contiene solo compromisos activos. Los pagos únicos
+  // cerrados siguen en data.deudas y en el registro de pagos.
+  const deudas = data.deudas_activas || (data.deudas || []).filter(d => !(d.frecuencia === 'Único' && d.estado === 'Pagado'));
   if (!deudas.length) {
-    cards.innerHTML = '<p class="hint">Aún no hay deudas registradas.</p>';
+    cards.innerHTML = '<p class="hint">No hay compromisos activos. Las deudas únicas pagadas se conservan en el registro de pagos.</p>';
   } else {
     cards.innerHTML = deudas.map(d => `
       <div class="mec-card ${d.estado === 'Pagado' ? 'toggle-inactive' : ''}">
@@ -1213,14 +1232,19 @@ function renderDeudasTaller(data) {
       <td>${estadoRecordatorio(item)}</td>
     </tr>`).join('') : '<tr class="empty-row"><td colspan="7">Sin compromisos registrados</td></tr>';
 
-  const movements = [
-    ...(data.fondos || []).map(f => ({ tipo: 'Aporte', fecha: f.fecha, acreedor: f.acreedor, periodo: f.periodo, monto: f.monto, detalle: f.metodo || f.observaciones || 'Dinero apartado' })),
-    ...(data.pagos || []).map(p => ({ tipo: `Pago ${p.tipo_pago || ''}`.trim(), fecha: p.fecha, acreedor: p.acreedor, periodo: p.periodo, monto: p.monto, detalle: p.observaciones || 'Pago registrado' })),
-  ].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const balances = data.balance_mensual || [];
+  const balanceBody = document.getElementById('tblBalanceMensualDeudas');
+  balanceBody.innerHTML = balances.length ? balances.map(item => `
+    <tr><td><strong>${escHtml(item.mes)}</strong></td><td>${item.operaciones}</td><td><strong>${fmt(item.pagado)}</strong></td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">Sin pagos registrados</td></tr>';
+
+  // El registro inferior es exclusivamente de pagos efectivos; los aportes
+  // al bolsillo se consultan en cada tarjeta y no se mezclan con pagos.
+  const movements = (data.pagos || []).map(p => ({ tipo: `Pago ${p.tipo_pago || ''}`.trim(), fecha: p.fecha, acreedor: p.acreedor, periodo: p.periodo, monto: p.monto, detalle: p.observaciones || 'Pago registrado' }))
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
   const movementBody = document.getElementById('tblMovimientosDeudas');
   movementBody.innerHTML = movements.length ? movements.map(m => `
     <tr><td>${escHtml(m.tipo)}</td><td>${escHtml(m.fecha)}</td><td>${escHtml(m.acreedor)}</td>
-    <td>${escHtml(m.periodo)}</td><td><strong>${fmt(m.monto)}</strong></td><td>${escHtml(m.detalle)}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="6">Sin movimientos registrados</td></tr>';
+    <td>${escHtml(m.periodo)}</td><td><strong>${fmt(m.monto)}</strong></td><td>${escHtml(m.detalle)}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="6">Sin pagos registrados</td></tr>';
 }
 
 async function cargarPanelDeudas() {
