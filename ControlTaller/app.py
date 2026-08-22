@@ -733,15 +733,6 @@ def _next_week_day(reference):
     return reference + timedelta(days=7)
 
 
-def _period_start(frecuencia, vencimiento):
-    """Devuelve el inicio del período que corresponde al próximo vencimiento."""
-    if frecuencia == 'Mensual':
-        return date(vencimiento.year, vencimiento.month, 1)
-    if frecuencia == 'Semanal':
-        return vencimiento - timedelta(days=6)
-    return vencimiento
-
-
 def _fondos_deuda(wb):
     ws = wb['Fondos Deudas']
     headers = SHEET_HEADERS['Fondos Deudas']
@@ -818,8 +809,6 @@ def _deuda_records(wb):
             periodo = vencimiento.isoformat()
         else:
             periodo = 'Único'
-        periodo_inicio = _period_start(frecuencia, vencimiento)
-        periodo_iniciado = frecuencia == 'Único' or hoy >= periodo_inicio
         fondos_deuda = [f for f in fondos if f['deuda_id'] == deuda_id]
         pagos_deuda = [p for p in pagos if p['deuda_id'] == deuda_id]
         fondos_periodo = sum(f['monto'] for f in fondos_deuda if frecuencia == 'Único' or f['periodo'] == periodo)
@@ -830,14 +819,7 @@ def _deuda_records(wb):
         fondo_disponible = round(max(fondos_periodo - pagos_periodo, 0.0), 2)
         faltante = round(max(saldo_periodo - fondo_disponible, 0.0), 2)
         estado_base = str(values.get('Estado') or '').strip()
-        if not periodo_iniciado and frecuencia in {'Mensual', 'Semanal'}:
-            # El período siguiente queda programado, pero no es una obligación
-            # vigente hasta que comienza su ciclo. No debe sumarse al total actual.
-            saldo_periodo = 0.0
-            fondo_disponible = 0.0
-            faltante = 0.0
-            estado = 'Programada'
-        elif frecuencia == 'Único' and saldo_periodo <= 0.009:
+        if frecuencia == 'Único' and saldo_periodo <= 0.009:
             estado = 'Pagado'
         elif frecuencia in {'Mensual', 'Semanal'} and saldo_periodo <= 0.009:
             estado = 'Pagado'
@@ -860,8 +842,6 @@ def _deuda_records(wb):
             'dia_pago': int(values.get('Día Pago') or vencimiento.day),
             'proximo_vencimiento': vencimiento.isoformat(),
             'periodo': periodo,
-            'periodo_inicio': periodo_inicio.isoformat(),
-            'periodo_iniciado': periodo_iniciado,
             'estado': estado,
             'observaciones': values.get('Observaciones') or '',
             'fondos_aportados': aportado_total,
@@ -894,11 +874,6 @@ def _deudas_panel(wb):
     deudas_activas = [
         d for d in deudas
         if not (d['tipo'] == 'Variable' and d['saldo_pendiente'] <= 0.009)
-        and not (d['tipo'] == 'Recurrente' and not d['periodo_iniciado'])
-    ]
-    deudas_programadas = [
-        d for d in deudas
-        if d['tipo'] == 'Recurrente' and not d['periodo_iniciado']
     ]
     calendario = []
     for deuda in deudas_activas:
@@ -942,7 +917,6 @@ def _deudas_panel(wb):
     return {
         'deudas': deudas,
         'deudas_activas': deudas_activas,
-        'deudas_programadas': deudas_programadas,
         'fondos': fondos,
         'pagos': pagos,
         'balance_mensual': balance_mensual,
