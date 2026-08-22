@@ -46,7 +46,7 @@ CONTROL_HEADERS = {
     ],
     "Deudas Taller": [
         "ID", "Fecha Registro", "Acreedor", "Concepto", "Monto Total", "Frecuencia",
-        "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones",
+        "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones", "Tipo",
     ],
     "Fondos Deudas": [
         "ID", "Fecha Aporte", "Deuda ID", "Período", "Acreedor", "Monto", "Método", "Observaciones",
@@ -290,7 +290,14 @@ def _ensure_required_sheets() -> None:
             and list(first_row[0][:len(headers)]) != list(headers)
             and list(first_row[0][:7]) == ["ID", "Fecha Pago", "Mecánico", "Semana", "N° Trabajos", "Total Mano de Obra", "Total Comisión"]
         )
-        if not populated or needs_payments_upgrade:
+        # La columna Tipo se agrega al final para no desplazar las diez columnas
+        # existentes de Deudas Taller ni invalidar respaldos antiguos.
+        needs_deudas_type_upgrade = (
+            title == "Deudas Taller" and populated
+            and list(first_row[0][:10]) == list(headers[:10])
+            and list(first_row[0][:len(headers)]) != list(headers)
+        )
+        if not populated or needs_payments_upgrade or needs_deudas_type_upgrade:
             response = _execute(values_api.update(
                 spreadsheetId=_spreadsheet_id(),
                 range=f"{_quote_title(title)}!A1",
@@ -615,6 +622,31 @@ def _copy_local_sheet_values(source_ws, target_ws) -> None:
             target_ws.cell(row=cell.row, column=cell.column, value=cell.value)
 
 
+def _normalize_incoming_headers(workbook: Workbook) -> None:
+    """Migra respaldos XLSX antiguos sin cambiar sus datos ni otras cabeceras."""
+    title = 'Deudas Taller'
+    if title not in workbook.sheetnames:
+        return
+    ws = workbook[title]
+    headers = REMOTE_HEADERS[title]
+    legacy_headers = headers[:10]
+    current = [ws.cell(row=1, column=index).value for index in range(1, len(headers) + 1)]
+    if list(current[:10]) != list(legacy_headers):
+        return
+    type_column = len(headers)
+    if str(current[type_column - 1] or '').strip() != 'Tipo':
+        ws.cell(row=1, column=type_column, value='Tipo')
+    frequency_column = legacy_headers.index('Frecuencia') + 1
+    for row_number in range(2, ws.max_row + 1):
+        if ws.cell(row=row_number, column=1).value in (None, ''):
+            continue
+        type_cell = ws.cell(row=row_number, column=type_column)
+        if str(type_cell.value or '').strip():
+            continue
+        frequency = str(ws.cell(row=row_number, column=frequency_column).value or '').strip().casefold()
+        type_cell.value = 'Recurrente' if frequency in {'mensual', 'semanal', 'monthly', 'weekly'} else 'Variable'
+
+
 def _replace_workbook_contents(target: Workbook, incoming: Workbook) -> None:
     for title in list(incoming.sheetnames):
         if title in target.sheetnames:
@@ -631,6 +663,7 @@ def import_full_workbook_stream(
     sheet_owners: dict[str, str],
 ) -> list[str]:
     incoming = load_workbook(io.BytesIO(stream.read()), data_only=True)
+    _normalize_incoming_headers(incoming)
     current = RemoteWorkbook(_remote_workbook(force_refresh=True))
     try:
         _replace_workbook_contents(current._workbook, incoming)
@@ -647,6 +680,7 @@ def import_workbook_stream(
     allowed_sheets: Iterable[str] | None = None,
 ) -> list[str]:
     incoming = load_workbook(io.BytesIO(stream.read()), data_only=True)
+    _normalize_incoming_headers(incoming)
     current = RemoteWorkbook(_remote_workbook(force_refresh=True))
     try:
         allowed = set(allowed_sheets) if allowed_sheets else set(incoming.sheetnames)

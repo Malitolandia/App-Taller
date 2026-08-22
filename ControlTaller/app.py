@@ -41,7 +41,7 @@ SHEET_HEADERS = {
     "Descuentos Nomina": ["ID", "Fecha Aplicación", "Mecánico", "Semana", "Concepto",
                           "Monto", "Préstamo ID", "Observaciones"],
     "Deudas Taller": ["ID", "Fecha Registro", "Acreedor", "Concepto", "Monto Total", "Frecuencia",
-                      "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones"],
+                      "Día Pago", "Próximo Vencimiento", "Estado", "Observaciones", "Tipo"],
     "Fondos Deudas": ["ID", "Fecha Aporte", "Deuda ID", "Período", "Acreedor", "Monto", "Método", "Observaciones"],
     "Pagos Deudas": ["ID", "Fecha Pago", "Deuda ID", "Período", "Acreedor", "Monto", "Tipo Pago", "Observaciones"],
     "Herramientas": ["ID", "Herramienta", "Prestada A", "Entregada Por", "Fecha Préstamo",
@@ -690,6 +690,24 @@ def _frequency(value):
     raise ValueError('La frecuencia debe ser Único, Semanal o Mensual')
 
 
+def _debt_type(value, frequency=None):
+    """Normaliza el tipo nuevo e infiere el tipo de filas antiguas."""
+    normalized = normalize_name(value)
+    if normalized in {'recurrente', 'recurrent', 'fijo', 'fija'}:
+        tipo = 'Recurrente'
+    elif normalized in {'variable'}:
+        tipo = 'Variable'
+    elif not normalized:
+        # Compatibilidad: Mensual/Semanal eran recurrentes; Único era una
+        # obligación que se cerraba al pagarla completamente.
+        tipo = 'Recurrente' if frequency in {'Mensual', 'Semanal'} else 'Variable'
+    else:
+        raise ValueError('El tipo debe ser Recurrente o Variable')
+    if tipo == 'Recurrente' and frequency == 'Único':
+        raise ValueError('Una deuda recurrente debe tener frecuencia Mensual o Semanal')
+    return tipo
+
+
 def _safe_month_day(year, month, day_number):
     last_day = calendar.monthrange(year, month)[1]
     return date(year, month, min(int(day_number), last_day))
@@ -772,9 +790,14 @@ def _deuda_records(wb):
         values = _row_values(row, headers)
         deuda_id = int(values.get('ID') or 0)
         try:
-            frecuencia = _frequency(values.get('Frecuencia'))
+            frecuencia_base = _frequency(values.get('Frecuencia'))
         except ValueError:
-            frecuencia = 'Único'
+            frecuencia_base = 'Único'
+        try:
+            tipo = _debt_type(values.get('Tipo'), frecuencia_base)
+        except ValueError:
+            tipo = 'Variable'
+        frecuencia = frecuencia_base if tipo == 'Recurrente' else 'Único'
         monto_total = money(values.get('Monto Total'))
         try:
             vencimiento = _parse_iso_date(values.get('Próximo Vencimiento'), 'Próximo vencimiento')
@@ -815,6 +838,7 @@ def _deuda_records(wb):
             'concepto': values.get('Concepto') or '',
             'monto_total': monto_total,
             'frecuencia': frecuencia,
+            'tipo': tipo,
             'dia_pago': int(values.get('Día Pago') or vencimiento.day),
             'proximo_vencimiento': vencimiento.isoformat(),
             'periodo': periodo,
@@ -845,11 +869,11 @@ def _deudas_panel(wb):
     pagos = _pagos_deuda(wb)
     hoy = date.today()
     mes_actual = hoy.strftime('%Y-%m')
-    # Las deudas únicas pagadas dejan de ser compromisos activos, pero siguen
+    # Las Variables pagadas dejan de ser compromisos activos, pero siguen
     # en `deudas` y en `pagos` para conservar el registro histórico.
     deudas_activas = [
         d for d in deudas
-        if not (d['frecuencia'] == 'Único' and d['estado'] == 'Pagado')
+        if not (d['tipo'] == 'Variable' and d['saldo_pendiente'] <= 0.009)
     ]
     calendario = []
     for deuda in deudas_activas:
@@ -878,7 +902,17 @@ def _deudas_panel(wb):
     balance_mensual = sorted(balance.values(), key=lambda item: item['mes'], reverse=True)
     pagado_total = round(sum(p['monto'] for p in pagos), 2)
     pagado_mes = round(sum(p['monto'] for p in pagos if _payment_month(p.get('fecha')) == mes_actual), 2)
-    falta_pagar = round(sum(d['saldo_pendiente'] for d in deudas if d['estado'] != 'Pagado'), 2)
+    # Solo obligaciones activas con saldo materialmente pendiente; las Variables
+    # pagadas permanecen en el histórico, pero no deben inflar este indicador.
+    falta_recurrente = round(sum(
+        d['saldo_pendiente'] for d in deudas_activas
+        if d['tipo'] == 'Recurrente' and d['saldo_pendiente'] > 0.009
+    ), 2)
+    falta_variable = round(sum(
+        d['saldo_pendiente'] for d in deudas_activas
+        if d['tipo'] == 'Variable' and d['saldo_pendiente'] > 0.009
+    ), 2)
+    falta_pagar = round(falta_recurrente + falta_variable, 2)
 
     return {
         'deudas': deudas,
@@ -891,6 +925,8 @@ def _deudas_panel(wb):
         'totales': {
             'comprometido': falta_pagar,
             'faltante_pagar': falta_pagar,
+            'faltante_recurrente': falta_recurrente,
+            'faltante_variable': falta_variable,
             'pagado_total': pagado_total,
             'pagado_mes': pagado_mes,
             'mes_actual': mes_actual,
@@ -935,14 +971,16 @@ def crear_deuda_taller():
     concepto = ' '.join(str(data.get('concepto') or '').strip().split())
     try:
         monto = round(float(data.get('monto_total') or 0), 2)
-        frecuencia = _frequency(data.get('frecuencia'))
+        frecuencia_base = _frequency(data.get('frecuencia'))
+        tipo = _debt_type(data.get('tipo'), frecuencia_base)
+        frecuencia = frecuencia_base if tipo == 'Recurrente' else 'Único'
     except (TypeError, ValueError) as exc:
-        return jsonify({'success': False, 'error': str(exc) or 'Monto o frecuencia no válidos'}), 400
+        return jsonify({'success': False, 'error': str(exc) or 'Monto, tipo o frecuencia no válidos'}), 400
     if not acreedor or not concepto or monto <= 0:
-        return jsonify({'success': False, 'error': 'Acreedor, concepto y monto son obligatorios y deben ser válidos'}), 400
+        return jsonify({'success': False, 'error': 'Acreedor, concepto y un monto válido son obligatorios'}), 400
     registro = date.today()
     try:
-        if frecuencia == 'Mensual':
+        if tipo == 'Recurrente' and frecuencia == 'Mensual':
             dia = int(data.get('dia_pago') or 0)
             if dia < 1 or dia > 31:
                 raise ValueError('El día de pago mensual debe estar entre 1 y 31')
@@ -950,7 +988,7 @@ def crear_deuda_taller():
         else:
             vencimiento = _parse_iso_date(
                 data.get('fecha_vencimiento'),
-                'La primera fecha semanal' if frecuencia == 'Semanal' else 'La fecha de vencimiento',
+                'La primera fecha de pago semanal' if frecuencia == 'Semanal' else 'La fecha de vencimiento',
             )
             dia = vencimiento.day
     except (TypeError, ValueError) as exc:
@@ -964,6 +1002,7 @@ def crear_deuda_taller():
         'Concepto': concepto, 'Monto Total': monto, 'Frecuencia': frecuencia,
         'Día Pago': dia, 'Próximo Vencimiento': vencimiento.isoformat(),
         'Estado': 'Pendiente de reunir', 'Observaciones': (data.get('observaciones') or '').strip(),
+        'Tipo': tipo,
     }, deuda_id)
     wb.save(EXCEL_FILE)
     return jsonify({'success': True, 'id': deuda_id, 'proximo_vencimiento': vencimiento.isoformat(),
@@ -982,20 +1021,22 @@ def update_deuda_taller(deuda_id):
     concepto = ' '.join(str(data.get('concepto', actual['concepto']) or '').strip().split())
     try:
         monto = round(float(data.get('monto_total', actual['monto_total']) or 0), 2)
-        frecuencia = _frequency(data.get('frecuencia', actual['frecuencia']))
+        frecuencia_base = _frequency(data.get('frecuencia', actual['frecuencia']))
+        tipo = _debt_type(data.get('tipo', actual['tipo']), frecuencia_base)
+        frecuencia = frecuencia_base if tipo == 'Recurrente' else 'Único'
     except (TypeError, ValueError) as exc:
-        return jsonify({'success': False, 'error': str(exc) or 'Monto o frecuencia no válidos'}), 400
+        return jsonify({'success': False, 'error': str(exc) or 'Monto, tipo o frecuencia no válidos'}), 400
     if not acreedor or not concepto or monto <= 0:
-        return jsonify({'success': False, 'error': 'Acreedor, concepto y monto son obligatorios y deben ser válidos'}), 400
+        return jsonify({'success': False, 'error': 'Acreedor, concepto y un monto válido son obligatorios'}), 400
 
     fondos = _fondos_deuda(wb)
     pagos = _pagos_deuda(wb)
     tiene_historial = any(x['deuda_id'] == deuda_id for x in fondos + pagos)
-    if tiene_historial and frecuencia != actual['frecuencia']:
-        return jsonify({'success': False, 'error': 'No se puede cambiar la frecuencia de una deuda con fondos o pagos históricos'}), 409
+    if tiene_historial and (tipo != actual['tipo'] or frecuencia != actual['frecuencia']):
+        return jsonify({'success': False, 'error': 'No se puede cambiar el tipo o la frecuencia de una deuda con fondos o pagos históricos'}), 409
 
     try:
-        if frecuencia == 'Mensual':
+        if tipo == 'Recurrente' and frecuencia == 'Mensual':
             dia = int(data.get('dia_pago', actual['dia_pago']) or 0)
             if dia < 1 or dia > 31:
                 raise ValueError('El día de pago mensual debe estar entre 1 y 31')
@@ -1019,6 +1060,7 @@ def update_deuda_taller(deuda_id):
         'Acreedor': acreedor, 'Concepto': concepto, 'Monto Total': monto,
         'Frecuencia': frecuencia, 'Día Pago': dia, 'Próximo Vencimiento': vencimiento.isoformat(),
         'Estado': 'Pendiente de reunir', 'Observaciones': str(data.get('observaciones', actual['observaciones']) or '').strip(),
+        'Tipo': tipo,
     }
     for key, value in values.items():
         ws.cell(row=row[0].row, column=headers.index(key) + 1, value=value)
