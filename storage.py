@@ -313,12 +313,42 @@ def _prepare_remote_schema() -> None:
 
 
 _VALUES_CACHE: tuple[float, dict[str, list[list]]] | None = None
+# Caché breve por conjunto de pestañas. La clave ordenada permite reutilizar
+# la instantánea exacta de Nómina o Deudas sin cargar las 17 pestañas.
+_SCOPED_VALUES_CACHE: dict[tuple[str, ...], tuple[float, dict[str, list[list]]]] = {}
 _VALUES_TTL_SECONDS = 10.0
 
 
 def _invalidate_values_cache() -> None:
     global _VALUES_CACHE
     _VALUES_CACHE = None
+    _SCOPED_VALUES_CACHE.clear()
+
+
+def _scope_key(sheet_titles: Iterable[str] | None) -> tuple[str, ...] | None:
+    if sheet_titles is None:
+        return None
+    wanted = {str(title).strip() for title in sheet_titles if str(title).strip()}
+    return tuple(title for title in REMOTE_HEADERS if title in wanted)
+
+
+def _cache_entry(scope: tuple[str, ...] | None):
+    if scope is None:
+        return _VALUES_CACHE
+    return _SCOPED_VALUES_CACHE.get(scope)
+
+
+def _cache_is_fresh(entry, now: float) -> bool:
+    return bool(entry and now - entry[0] < _VALUES_TTL_SECONDS)
+
+
+def _subset_from_full_cache(scope: tuple[str, ...], now: float):
+    if not _cache_is_fresh(_VALUES_CACHE, now):
+        return None
+    full_values = _VALUES_CACHE[1]
+    if not all(title in full_values for title in scope):
+        return None
+    return {title: full_values[title] for title in scope}
 
 
 def _workbook_from_values(values_by_title: dict[str, list[list]]) -> Workbook:
@@ -334,20 +364,33 @@ def _workbook_from_values(values_by_title: dict[str, list[list]]) -> Workbook:
     return workbook
 
 
-def _remote_workbook(force_refresh: bool = False) -> Workbook:
+def _remote_workbook(
+    force_refresh: bool = False,
+    sheet_titles: Iterable[str] | None = None,
+) -> Workbook:
     global _VALUES_CACHE
     _prepare_remote_schema()
+    scope = _scope_key(sheet_titles)
     now = time.monotonic()
-    if not force_refresh and _VALUES_CACHE and now - _VALUES_CACHE[0] < _VALUES_TTL_SECONDS:
-        return _workbook_from_values(_VALUES_CACHE[1])
+
+    if not force_refresh:
+        entry = _cache_entry(scope)
+        if _cache_is_fresh(entry, now):
+            return _workbook_from_values(entry[1])
+        if scope is not None:
+            from_full = _subset_from_full_cache(scope, now)
+            if from_full is not None:
+                _SCOPED_VALUES_CACHE[scope] = (now, from_full)
+                return _workbook_from_values(from_full)
 
     service = _sheets_service()
     properties = _sheet_properties()
     available = {props["title"] for props in properties}
     # Nunca leer pestañas ajenas o la pestaña predeterminada `Hoja 1`.
-    titles = [title for title in REMOTE_HEADERS if title in available]
+    requested = list(scope) if scope is not None else list(REMOTE_HEADERS)
+    titles = [title for title in requested if title in REMOTE_HEADERS and title in available]
     if not titles:
-        raise RuntimeError("Google Sheets no contiene las pestañas requeridas")
+        raise RuntimeError("Google Sheets no contiene las pestañas requeridas para esta carga")
     try:
         response = _execute(service.spreadsheets().values().batchGet(
             spreadsheetId=_spreadsheet_id(),
@@ -357,15 +400,28 @@ def _remote_workbook(force_refresh: bool = False) -> Workbook:
         ))
     except Exception as exc:
         response_meta = getattr(exc, "resp", None)
-        if getattr(response_meta, "status", None) == 429 and _VALUES_CACHE:
-            return _workbook_from_values(_VALUES_CACHE[1])
+        scoped_entry = _cache_entry(scope)
+        if getattr(response_meta, "status", None) == 429:
+            if scoped_entry:
+                return _workbook_from_values(scoped_entry[1])
+            if scope is not None:
+                from_full = _subset_from_full_cache(scope, now)
+                if from_full is not None:
+                    return _workbook_from_values(from_full)
+            if _VALUES_CACHE:
+                return _workbook_from_values(_VALUES_CACHE[1])
         raise
     value_ranges = response.get("valueRanges", [])
     values_by_title: dict[str, list[list]] = {}
     for index, title in enumerate(titles):
         value_range = value_ranges[index] if index < len(value_ranges) else {}
         values_by_title[title] = value_range.get("values", [])
-    _VALUES_CACHE = (now, values_by_title)
+    entry = (now, values_by_title)
+    if scope is None:
+        _VALUES_CACHE = entry
+        _SCOPED_VALUES_CACHE.clear()
+    else:
+        _SCOPED_VALUES_CACHE[scope] = entry
     return _workbook_from_values(values_by_title)
 
 
@@ -452,11 +508,12 @@ def _sync_one_sheet(title: str, values: list[list], previous: list[list] | None)
 
 
 class RemoteWorkbook:
-    """Proxy de openpyxl que conoce el estado original de cada pestaña."""
+    """Proxy de openpyxl que conoce el estado original y el alcance cargado."""
 
-    def __init__(self, workbook: Workbook):
+    def __init__(self, workbook: Workbook, scope: tuple[str, ...] | None = None):
         self._workbook = workbook
         self._original = _snapshot(workbook)
+        self._scope = scope
 
     def __getitem__(self, key):
         return self._workbook[key]
@@ -465,25 +522,40 @@ class RemoteWorkbook:
         return getattr(self._workbook, name)
 
     def save(self, _path: str | None = None) -> dict[str, dict[str, int]]:
-        return save_workbook_to_sheets(self._workbook, original=self._original)
+        return save_workbook_to_sheets(
+            self._workbook,
+            original=self._original,
+            cache_scope=self._scope,
+        )
 
     def close(self) -> None:
         self._workbook.close()
 
 
-def load_workbook_for_app(local_path: str, data_only: bool = False, read_only: bool = False):
-    """Carga una copia en memoria desde Google Sheets; nunca crea un XLSX local."""
+def load_workbook_for_app(
+    local_path: str,
+    data_only: bool = False,
+    read_only: bool = False,
+    sheet_titles: Iterable[str] | None = None,
+    force_refresh: bool = False,
+):
+    """Carga solo las pestañas solicitadas, o todas si no se especifican."""
     if not sheets_enabled():
         raise RuntimeError(
             "El backend remoto no está configurado. Define GOOGLE_SHEETS_ID y "
             "GOOGLE_SERVICE_ACCOUNT_JSON en Vercel."
         )
-    return RemoteWorkbook(_remote_workbook())
+    scope = _scope_key(sheet_titles)
+    return RemoteWorkbook(
+        _remote_workbook(force_refresh=force_refresh, sheet_titles=scope),
+        scope=scope,
+    )
 
 
 def save_workbook_to_sheets(
     workbook: Workbook,
     original: dict[str, list[list]] | None = None,
+    cache_scope: tuple[str, ...] | None = None,
 ) -> dict[str, dict[str, int]]:
     """Sincroniza solo las hojas modificadas y devuelve confirmaciones de API."""
     _prepare_remote_schema()
@@ -511,8 +583,13 @@ def save_workbook_to_sheets(
             existing.add(title)
         previous = original.get(title) if original else None
         results[title] = _sync_one_sheet(title, current, previous)
-    global _VALUES_CACHE
-    _VALUES_CACHE = (time.monotonic(), _snapshot(workbook))
+    snapshot = _snapshot(workbook)
+    _invalidate_values_cache()
+    if cache_scope is None:
+        global _VALUES_CACHE
+        _VALUES_CACHE = (time.monotonic(), snapshot)
+    else:
+        _SCOPED_VALUES_CACHE[cache_scope] = (time.monotonic(), snapshot)
     return results
 
 

@@ -52,9 +52,21 @@ SHEET_HEADERS = {
 # Las pestañas y encabezados remotos se preparan en storage.py.
 # Este módulo solo trabaja sobre la instantánea recibida de Google Sheets.
 
-def get_wb():
-    """Carga una instantánea actual desde Google Sheets."""
-    return load_workbook_for_app(EXCEL_FILE)
+SHEETS_NOMINA = ("Trabajos", "Descuentos Nomina")
+SHEETS_PRESTAMOS = ("Prestamos", "Descuentos Nomina")
+SHEETS_PRESTAMOS_PANEL = ("Trabajos", "Prestamos", "Descuentos Nomina")
+SHEETS_PRESTAMO_WRITE = ("Mecanicos", "Prestamos")
+SHEETS_DEUDAS = ("Deudas Taller", "Fondos Deudas", "Pagos Deudas")
+SHEETS_PAGAR_NOMINA = ("Trabajos", "Descuentos Nomina", "Pagos")
+
+
+def get_wb(sheet_titles=None, force_refresh=False):
+    """Carga una instantánea actual, limitada a las pestañas requeridas."""
+    return load_workbook_for_app(
+        EXCEL_FILE,
+        sheet_titles=sheet_titles,
+        force_refresh=force_refresh,
+    )
 
 
 def next_id(ws):
@@ -547,7 +559,7 @@ def delete_trabajo(tid):
 @app.route('/api/nomina/resumen', methods=['GET'])
 def nomina_resumen():
     semana = request.args.get('semana')
-    wb = get_wb()
+    wb = get_wb(SHEETS_NOMINA)
     return jsonify(_nomina_response(wb, semana=semana))
 
 
@@ -557,7 +569,7 @@ def nomina_resumen():
 
 @app.route('/api/prestamos', methods=['GET'])
 def list_prestamos():
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMOS)
     mecanico = request.args.get('mecanico')
     prestamos = _loan_records(wb)
     descuentos = _discount_records(wb)
@@ -570,7 +582,7 @@ def list_prestamos():
 @app.route('/api/prestamos/panel', methods=['GET'])
 def prestamos_panel():
     semana = request.args.get('semana')
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMOS_PANEL)
     return jsonify({
         'nomina': _nomina_response(wb, semana=semana),
         'prestamos': _loan_records(wb),
@@ -592,7 +604,7 @@ def create_prestamo():
     if cuota > monto:
         cuota = monto
 
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMO_WRITE)
     ws_mec = wb['Mecanicos']
     if not any(normalize_name(row[1].value) == normalize_name(mecanico) and row[4].value != 'No'
                for row in ws_mec.iter_rows(min_row=2) if row[0].value is not None):
@@ -613,7 +625,7 @@ def create_prestamo():
 @app.route('/api/prestamo/<int:pid>', methods=['PUT'])
 def update_prestamo(pid):
     data = request.json or {}
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMOS)
     ws = wb['Prestamos']
     row = find_row_by_id(ws, pid)
     if not row:
@@ -637,7 +649,7 @@ def update_prestamo(pid):
 
 @app.route('/api/prestamo/<int:pid>', methods=['DELETE'])
 def delete_prestamo(pid):
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMOS)
     ws = wb['Prestamos']
     row = find_row_by_id(ws, pid)
     if not row:
@@ -908,16 +920,16 @@ def _save_deuda_status(wb, deuda_id, estado=None, proximo_vencimiento=None):
 
 @app.route('/api/deudas-taller', methods=['GET'])
 def list_deudas_taller():
-    return jsonify(_deudas_panel(get_wb()))
+    return jsonify(_deudas_panel(get_wb(SHEETS_DEUDAS)))
 
 
 @app.route('/api/deudas-taller/panel', methods=['GET'])
 def deudas_taller_panel():
-    return jsonify(_deudas_panel(get_wb()))
+    return jsonify(_deudas_panel(get_wb(SHEETS_DEUDAS)))
 
 
 @app.route('/api/deuda-taller', methods=['POST'])
-def create_deuda_taller():
+def crear_deuda_taller():
     data = request.json or {}
     acreedor = ' '.join(str(data.get('acreedor') or '').strip().split())
     concepto = ' '.join(str(data.get('concepto') or '').strip().split())
@@ -944,7 +956,7 @@ def create_deuda_taller():
     except (TypeError, ValueError) as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
 
-    wb = get_wb()
+    wb = get_wb(SHEETS_DEUDAS)
     ws = wb['Deudas Taller']
     deuda_id = next_id(ws)
     append_row(ws, SHEET_HEADERS['Deudas Taller'], {
@@ -961,7 +973,7 @@ def create_deuda_taller():
 @app.route('/api/deuda-taller/<int:deuda_id>', methods=['PUT', 'PATCH'])
 def update_deuda_taller(deuda_id):
     data = request.json or {}
-    wb = get_wb()
+    wb = get_wb(SHEETS_DEUDAS)
     actual = _get_deuda_summary(wb, deuda_id)
     if not actual:
         return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
@@ -1016,7 +1028,7 @@ def update_deuda_taller(deuda_id):
 
 @app.route('/api/deuda-taller/<int:deuda_id>', methods=['DELETE'])
 def delete_deuda_taller(deuda_id):
-    wb = get_wb()
+    wb = get_wb(SHEETS_DEUDAS)
     actual = _get_deuda_summary(wb, deuda_id)
     if not actual:
         return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
@@ -1041,7 +1053,7 @@ def create_fondo_deuda():
         return jsonify({'success': False, 'error': 'La deuda y el monto deben ser válidos'}), 400
     if deuda_id <= 0 or monto <= 0:
         return jsonify({'success': False, 'error': 'La deuda y el monto deben ser mayores que cero'}), 400
-    wb = get_wb()
+    wb = get_wb(SHEETS_DEUDAS)
     deuda = _get_deuda_summary(wb, deuda_id)
     if not deuda:
         return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404
@@ -1073,7 +1085,7 @@ def create_pago_deuda():
         return jsonify({'success': False, 'error': 'La deuda y el monto deben ser válidos'}), 400
     if deuda_id <= 0 or monto <= 0:
         return jsonify({'success': False, 'error': 'La deuda y el monto deben ser mayores que cero'}), 400
-    wb = get_wb()
+    wb = get_wb(SHEETS_DEUDAS)
     deuda = _get_deuda_summary(wb, deuda_id)
     if not deuda:
         return jsonify({'success': False, 'error': 'Deuda no encontrada'}), 404

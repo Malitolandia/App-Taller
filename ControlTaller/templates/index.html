@@ -388,7 +388,6 @@
         <div class="kpi blue"><div class="label">Falta por pagar</div><div class="value" id="dtComprometido">$0</div></div>
         <div class="kpi green"><div class="label">Total pagado</div><div class="value" id="dtPagadoTotal">$0</div></div>
         <div class="kpi green"><div class="label">Pagado este mes</div><div class="value" id="dtPagadoMes">$0</div></div>
-        <div class="kpi orange"><div class="label">Faltante por reunir</div><div class="value" id="dtFaltante">$0</div></div>
         <div class="kpi"><div class="label">Próximos / atrasados</div><div class="value" id="dtAlertas">0 / 0</div></div>
       </div>
       <p class="hint">El total pagado y el balance mensual se calculan únicamente con registros de pago. El dinero apartado en bolsillos se muestra por separado en cada deuda.</p>
@@ -551,6 +550,8 @@ function showToast(msg, isError) {
 // arranque. La entrada expira enseguida y no sustituye la lectura confirmada
 // después de una escritura.
 const pendingReads = new Map();
+const responseCache = new Map();
+const PANEL_CACHE_TTL_MS = 8000;
 function readJSON(url) {
   if (pendingReads.has(url)) return pendingReads.get(url);
   const promise = fetch(url, { cache: 'no-store' }).then(async res => {
@@ -562,6 +563,20 @@ function readJSON(url) {
   });
   pendingReads.set(url, promise);
   return promise;
+}
+function readCachedJSON(url, key = url, ttl = PANEL_CACHE_TTL_MS) {
+  const cached = responseCache.get(key);
+  if (cached && Date.now() - cached.at < ttl) return Promise.resolve(cached.data);
+  const promise = readJSON(url).then(data => {
+    responseCache.set(key, { at: Date.now(), data });
+    return data;
+  });
+  return promise;
+}
+function invalidateReadCache(prefix) {
+  for (const key of responseCache.keys()) {
+    if (!prefix || key.startsWith(prefix)) responseCache.delete(key);
+  }
 }
 
 // ---------- Tabs ----------
@@ -806,8 +821,7 @@ function semanaActualKey() {
 async function initSemanaSelectorSiNecesario() {
   const selSemana = document.getElementById('filtroSemana');
   if (selSemana.dataset.loaded) return;
-  const resInit = await fetch(APP_BASE + '/api/nomina/resumen');
-  const dataInit = await resInit.json();
+  const dataInit = await readCachedJSON(APP_BASE + '/api/nomina/resumen', 'nomina:selector');
   const actual = semanaActualKey();
   let semanas = dataInit.semanas_disponibles || [];
   if (!semanas.includes(actual)) semanas = [actual, ...semanas];
@@ -822,8 +836,8 @@ async function cargarNomina() {
   const selSemana = document.getElementById('filtroSemana');
 
   const semana = selSemana.value;
-  const res = await fetch(APP_BASE + '/api/nomina/resumen' + (semana ? `?semana=${semana}` : ''));
-  const data = await res.json();
+  const url = APP_BASE + '/api/nomina/resumen' + (semana ? `?semana=${encodeURIComponent(semana)}` : '');
+  const data = await readCachedJSON(url, `nomina:${url}`);
 
   const tbody = document.getElementById('tblNomina');
   if (!data.resumen.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Sin datos para esta semana</td></tr>'; }
@@ -856,6 +870,8 @@ async function pagarNomina(mecanico) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar el pago (${res.status})`, true); return; }
   showToast(`Pago registrado: ${fmt(data.total_comision)}`);
+  invalidateReadCache('nomina:');
+  invalidateReadCache('prestamos:');
   cargarNomina(); cargarTrabajos();
 }
 
@@ -1000,9 +1016,9 @@ function setSemanaOptions(selectId, semanas, actual) {
 async function cargarPanelPrestamos() {
   const requested = document.getElementById('pSemana')?.value || semanaActualKey();
   const url = APP_BASE + '/api/prestamos/panel' + (requested ? `?semana=${encodeURIComponent(requested)}` : '');
-  const res = await fetch(url, { cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) { showToast(data.error || `Error al cargar préstamos (${res.status})`, true); return; }
+  let data;
+  try { data = await readCachedJSON(url, `prestamos:${url}`); }
+  catch (err) { showToast(err.message || 'Error al cargar préstamos', true); return; }
   panelPrestamosData = data;
   const actual = semanaActualKey();
   const semanas = data.nomina.semanas_disponibles || [];
@@ -1085,6 +1101,7 @@ async function crearPrestamo() {
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar (${res.status})`, true); return; }
   ['pMonto','pCuota','pObservaciones'].forEach(id => document.getElementById(id).value = '');
   showToast('Préstamo registrado correctamente');
+  invalidateReadCache('prestamos:');
   cargarPanelPrestamos();
 }
 
@@ -1129,6 +1146,8 @@ async function aplicarDescuento() {
   document.getElementById('dMonto').value = '';
   document.getElementById('dObservaciones').value = '';
   showToast('Descuento aplicado y saldo actualizado');
+  invalidateReadCache('prestamos:');
+  invalidateReadCache('nomina:');
   cargarPanelPrestamos();
 }
 
@@ -1141,6 +1160,7 @@ async function editarCuotaPrestamo(id, actual) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al actualizar (${res.status})`, true); return; }
   showToast('Cuota actualizada');
+  invalidateReadCache('prestamos:');
   cargarPanelPrestamos();
 }
 
@@ -1150,6 +1170,7 @@ async function eliminarPrestamo(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `No se pudo eliminar (${res.status})`, true); return; }
   showToast('Préstamo eliminado');
+  invalidateReadCache('prestamos:');
   cargarPanelPrestamos();
 }
 
@@ -1161,6 +1182,8 @@ async function pagarNominaPeriodo(mecanicoEncoded, semanaEncoded) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar el pago (${res.status})`, true); return; }
   showToast(`Pago registrado: ${fmt(data.neto_pagado)} neto`);
+  invalidateReadCache('prestamos:');
+  invalidateReadCache('nomina:');
   cargarPanelPrestamos(); cargarNomina(); cargarResumen();
 }
 
@@ -1190,8 +1213,6 @@ function renderDeudasTaller(data) {
   document.getElementById('dtComprometido').textContent = fmt(totals.faltante_pagar ?? totals.comprometido);
   document.getElementById('dtPagadoTotal').textContent = fmt(totals.pagado_total || 0);
   document.getElementById('dtPagadoMes').textContent = fmt(totals.pagado_mes || 0);
-  document.getElementById('dtFondos').textContent = fmt(totals.fondos_disponibles);
-  document.getElementById('dtFaltante').textContent = fmt(totals.faltante_reunir);
   document.getElementById('dtAlertas').textContent = `${totals.proximos || 0} / ${totals.atrasados || 0}`;
 
   const cards = document.getElementById('deudaTallerCards');
@@ -1248,9 +1269,10 @@ function renderDeudasTaller(data) {
 }
 
 async function cargarPanelDeudas() {
-  const res = await fetch(APP_BASE + '/api/deudas-taller/panel', { cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.success === false) { showToast(data.error || `Error al cargar deudas (${res.status})`, true); return; }
+  let data;
+  try { data = await readCachedJSON(APP_BASE + '/api/deudas-taller/panel', 'deudas:panel'); }
+  catch (err) { showToast(err.message || 'Error al cargar deudas', true); return; }
+  if (data.success === false) { showToast(data.error || 'Error al cargar deudas', true); return; }
   renderDeudasTaller(data);
 }
 
@@ -1274,6 +1296,7 @@ async function crearDeudaTaller() {
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar (${res.status})`, true); return; }
   ['dtAcreedor','dtConcepto','dtMonto','dtDiaPago','dtFechaVencimiento','dtObservaciones'].forEach(id => document.getElementById(id).value = '');
   showToast('Deuda registrada correctamente');
+  invalidateReadCache('deudas:');
   cargarPanelDeudas();
 }
 
@@ -1309,6 +1332,7 @@ async function editarDeudaTaller(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al editar (${res.status})`, true); return; }
   showToast('Deuda actualizada correctamente');
+  invalidateReadCache('deudas:');
   renderDeudasTaller(data.panel);
 }
 
@@ -1320,6 +1344,7 @@ async function eliminarDeudaTaller(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al eliminar (${res.status})`, true); return; }
   showToast('Deuda eliminada correctamente');
+  invalidateReadCache('deudas:');
   renderDeudasTaller(data.panel);
 }
 
@@ -1332,6 +1357,7 @@ async function registrarFondoDeuda(id, faltante) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar aporte (${res.status})`, true); return; }
   showToast('Aporte registrado en el bolsillo');
+  invalidateReadCache('deudas:');
   renderDeudasTaller(data.panel);
 }
 
@@ -1346,6 +1372,7 @@ async function pagarDeudaTaller(id, saldo, fondo) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) { showToast(data.error || `Error al registrar pago (${res.status})`, true); return; }
   showToast(data.tipo_pago === 'Total' ? 'Deuda pagada y cerrada' : 'Pago parcial registrado');
+  invalidateReadCache('deudas:');
   renderDeudasTaller(data.panel);
 }
 
@@ -1419,9 +1446,7 @@ async function cargarResumen() {
   if (!cats.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Sin gastos hoy</td></tr>'; }
   else { tbody.innerHTML = cats.map(([c, v]) => `<tr><td>${c}</td><td>${fmt(v)}</td></tr>`).join(''); }
 
-  const nomData = await readJSON(APP_BASE + '/api/nomina/resumen');
-  const pendiente = nomData.resumen.reduce((s, r) => s + r.pendiente, 0);
-  document.getElementById('kpiNominaPend').textContent = fmt(pendiente);
+  document.getElementById('kpiNominaPend').textContent = '—';
 
   const mecs = await readJSON(APP_BASE + '/api/mecanicos');
   document.getElementById('kpiMecActivos').textContent = mecs.filter(m => m['Activo'] !== 'No').length;
@@ -1499,6 +1524,7 @@ document.getElementById('trFecha').value = todayStr();
 document.getElementById('gFecha').value = todayStr();
 document.getElementById('herFecha').value = todayStr();
 document.getElementById('pFecha').value = todayStr();
+document.getElementById('kpiNominaPend').textContent = '—';
 cargarResumen();
 cargarMecanicosSelect();
 cargarEquiposSelect();
