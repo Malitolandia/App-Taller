@@ -393,7 +393,7 @@
         <div class="kpi green"><div class="label">Pagado este mes</div><div class="value" id="dtPagadoMes">$0</div></div>
         <div class="kpi"><div class="label">Próximos / atrasados</div><div class="value" id="dtAlertas">0 / 0</div></div>
       </div>
-      <p class="hint">El total pagado y el balance mensual se calculan únicamente con registros de pago. El dinero apartado en bolsillos se muestra por separado en cada deuda.</p>
+      <p class="hint">«Falta por pagar» corresponde únicamente al período vigente. Los próximos ciclos recurrentes se muestran aparte y se activan al comenzar su período. El total pagado y el balance mensual usan solo registros de pago; el dinero apartado en bolsillos se muestra por separado.</p>
     </div>
   </div>
 
@@ -401,6 +401,7 @@
     <div class="card-header">OBLIGACIONES ACTIVAS: RECURRENTES Y VARIABLES</div>
     <div class="card-body">
       <div class="mec-cards" id="deudaTallerCards"><p class="hint">Aún no hay deudas registradas.</p></div>
+      <div id="deudaTallerProgramadas" style="margin-top:18px;display:none"></div>
     </div>
   </div>
 
@@ -1268,6 +1269,25 @@ function renderDeudasTaller(data) {
       { tipo: 'Variable', titulo: 'Variables', items: deudas.filter(d => tipoDeuda(d) === 'Variable') },
     ];
     cards.innerHTML = grupos.filter(g => g.items.length).map(g => `<div style="grid-column:1/-1"><h3 style="margin:4px 0 0">${g.titulo}</h3></div>${g.items.map(renderDeuda).join('')}`).join('');
+  }
+
+  const programadas = data.deudas_programadas || [];
+  const programadasWrap = document.getElementById('deudaTallerProgramadas');
+  if (programadasWrap) {
+    programadasWrap.innerHTML = programadas.length ? `
+      <div class="hint" style="border-top:1px solid #d9e0e7;padding-top:12px">
+        <strong>PRÓXIMO PERÍODO — NO SUMA A FALTA POR PAGAR</strong><br>
+        Estas obligaciones se activan al comenzar la fecha indicada.
+      </div>
+      <div class="mec-cards" style="margin-top:10px">${programadas.map(d => `
+        <div class="mec-card" style="border-left-color:var(--gray)">
+          <h4>${escHtml(d.acreedor)} <span class="badge">Recurrente</span> <span class="badge">Programada</span></h4>
+          <div class="mec-row"><span>Concepto</span><span>${escHtml(d.concepto)}</span></div>
+          <div class="mec-row"><span>Valor del próximo período</span><strong>${fmt(d.monto_total)}</strong></div>
+          <div class="mec-row"><span>Se activa el</span><span>${escHtml(d.periodo_inicio)}</span></div>
+          <div class="mec-row"><span>Próximo vencimiento</span><span>${escHtml(d.proximo_vencimiento)} (${escHtml(d.frecuencia)})</span></div>
+        </div>`).join('')}</div>` : '';
+    programadasWrap.style.display = programadas.length ? '' : 'none';
   }
 
   const calendario = document.getElementById('tblCalendarioDeudas');
