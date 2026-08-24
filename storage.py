@@ -320,16 +320,18 @@ def _prepare_remote_schema() -> None:
 
 
 _VALUES_CACHE: tuple[float, dict[str, list[list]]] | None = None
-# Caché breve por conjunto de pestañas. La clave ordenada permite reutilizar
-# la instantánea exacta de Nómina o Deudas sin cargar las 17 pestañas.
+# Caché segmentado por conjunto de pestañas. Las respuestas se conservan durante
+# la vida útil del proceso y se invalidan inmediatamente después de escrituras.
 _SCOPED_VALUES_CACHE: dict[tuple[str, ...], tuple[float, dict[str, list[list]]]] = {}
-_VALUES_TTL_SECONDS = 10.0
+_VALUES_TTL_SECONDS = 600.0
+_VALUES_CACHE_LOCK = threading.RLock()
 
 
 def _invalidate_values_cache() -> None:
     global _VALUES_CACHE
-    _VALUES_CACHE = None
-    _SCOPED_VALUES_CACHE.clear()
+    with _VALUES_CACHE_LOCK:
+        _VALUES_CACHE = None
+        _SCOPED_VALUES_CACHE.clear()
 
 
 def _scope_key(sheet_titles: Iterable[str] | None) -> tuple[str, ...] | None:
@@ -358,6 +360,48 @@ def _subset_from_full_cache(scope: tuple[str, ...], now: float):
     return {title: full_values[title] for title in scope}
 
 
+def _subset_from_scoped_cache(scope: tuple[str, ...], now: float):
+    requested = set(scope)
+    candidates = []
+    for key, entry in _SCOPED_VALUES_CACHE.items():
+        if not _cache_is_fresh(entry, now) or not requested.issubset(key):
+            continue
+        values = entry[1]
+        if all(title in values for title in scope):
+            candidates.append((len(key), entry[0], values))
+    if not candidates:
+        return None
+    # Prefer the smallest fresh superconjunto para no reutilizar datos de más.
+    _, timestamp, values = min(candidates, key=lambda item: (item[0], -item[1]))
+    return {title: values[title] for title in scope}
+
+
+def _cached_values(scope: tuple[str, ...] | None, now: float):
+    entry = _cache_entry(scope)
+    if _cache_is_fresh(entry, now):
+        return entry[1]
+    if scope is not None:
+        subset = _subset_from_full_cache(scope, now)
+        if subset is not None:
+            return subset
+        return _subset_from_scoped_cache(scope, now)
+    return None
+
+
+def _stale_values(scope: tuple[str, ...] | None):
+    entry = _cache_entry(scope)
+    if entry:
+        return entry[1]
+    if scope is not None:
+        full = _VALUES_CACHE[1] if _VALUES_CACHE else None
+        if full and all(title in full for title in scope):
+            return {title: full[title] for title in scope}
+        subset = _subset_from_scoped_cache(scope, float('inf'))
+        if subset is not None:
+            return subset
+    return _VALUES_CACHE[1] if _VALUES_CACHE else None
+
+
 def _workbook_from_values(values_by_title: dict[str, list[list]]) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
@@ -378,58 +422,49 @@ def _remote_workbook(
     global _VALUES_CACHE
     _prepare_remote_schema()
     scope = _scope_key(sheet_titles)
-    now = time.monotonic()
+    with _VALUES_CACHE_LOCK:
+        now = time.monotonic()
+        if not force_refresh:
+            cached = _cached_values(scope, now)
+            if cached is not None:
+                if scope is not None and _cache_entry(scope) is None:
+                    _SCOPED_VALUES_CACHE[scope] = (now, cached)
+                return _workbook_from_values(cached)
 
-    if not force_refresh:
-        entry = _cache_entry(scope)
-        if _cache_is_fresh(entry, now):
-            return _workbook_from_values(entry[1])
-        if scope is not None:
-            from_full = _subset_from_full_cache(scope, now)
-            if from_full is not None:
-                _SCOPED_VALUES_CACHE[scope] = (now, from_full)
-                return _workbook_from_values(from_full)
-
-    service = _sheets_service()
-    properties = _sheet_properties()
-    available = {props["title"] for props in properties}
-    # Nunca leer pestañas ajenas o la pestaña predeterminada `Hoja 1`.
-    requested = list(scope) if scope is not None else list(REMOTE_HEADERS)
-    titles = [title for title in requested if title in REMOTE_HEADERS and title in available]
-    if not titles:
-        raise RuntimeError("Google Sheets no contiene las pestañas requeridas para esta carga")
-    try:
-        response = _execute(service.spreadsheets().values().batchGet(
-            spreadsheetId=_spreadsheet_id(),
-            ranges=[_title_range(title) for title in titles],
-            valueRenderOption="UNFORMATTED_VALUE",
-            dateTimeRenderOption="FORMATTED_STRING",
-        ))
-    except Exception as exc:
-        response_meta = getattr(exc, "resp", None)
-        scoped_entry = _cache_entry(scope)
-        if getattr(response_meta, "status", None) == 429:
-            if scoped_entry:
-                return _workbook_from_values(scoped_entry[1])
-            if scope is not None:
-                from_full = _subset_from_full_cache(scope, now)
-                if from_full is not None:
-                    return _workbook_from_values(from_full)
-            if _VALUES_CACHE:
-                return _workbook_from_values(_VALUES_CACHE[1])
-        raise
-    value_ranges = response.get("valueRanges", [])
-    values_by_title: dict[str, list[list]] = {}
-    for index, title in enumerate(titles):
-        value_range = value_ranges[index] if index < len(value_ranges) else {}
-        values_by_title[title] = value_range.get("values", [])
-    entry = (now, values_by_title)
-    if scope is None:
-        _VALUES_CACHE = entry
-        _SCOPED_VALUES_CACHE.clear()
-    else:
-        _SCOPED_VALUES_CACHE[scope] = entry
-    return _workbook_from_values(values_by_title)
+        service = _sheets_service()
+        properties = _sheet_properties()
+        available = {props["title"] for props in properties}
+        # Nunca leer pestañas ajenas o la pestaña predeterminada `Hoja 1`.
+        requested = list(scope) if scope is not None else list(REMOTE_HEADERS)
+        titles = [title for title in requested if title in REMOTE_HEADERS and title in available]
+        if not titles:
+            raise RuntimeError("Google Sheets no contiene las pestañas requeridas para esta carga")
+        try:
+            response = _execute(service.spreadsheets().values().batchGet(
+                spreadsheetId=_spreadsheet_id(),
+                ranges=[_title_range(title) for title in titles],
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING",
+            ))
+        except Exception as exc:
+            response_meta = getattr(exc, "resp", None)
+            if getattr(response_meta, "status", None) == 429:
+                stale = _stale_values(scope)
+                if stale is not None:
+                    return _workbook_from_values(stale)
+            raise
+        value_ranges = response.get("valueRanges", [])
+        values_by_title: dict[str, list[list]] = {}
+        for index, title in enumerate(titles):
+            value_range = value_ranges[index] if index < len(value_ranges) else {}
+            values_by_title[title] = value_range.get("values", [])
+        entry = (time.monotonic(), values_by_title)
+        if scope is None:
+            _VALUES_CACHE = entry
+            _SCOPED_VALUES_CACHE.clear()
+        else:
+            _SCOPED_VALUES_CACHE[scope] = entry
+        return _workbook_from_values(values_by_title)
 
 
 def _json_value(value):

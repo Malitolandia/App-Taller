@@ -263,7 +263,7 @@ def index():
 
 @app.route('/api/mecanicos', methods=['GET'])
 def list_mecanicos():
-    wb = get_wb()
+    wb = get_wb(('Mecanicos',))
     ws = wb["Mecanicos"]
     return jsonify(sheet_to_dicts(ws, SHEET_HEADERS["Mecanicos"]))
 
@@ -271,7 +271,7 @@ def list_mecanicos():
 @app.route('/api/mecanicos', methods=['POST'])
 def create_mecanico():
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Mecanicos',), force_refresh=True)
     ws = wb["Mecanicos"]
     mid = next_id(ws)
     append_row(ws, SHEET_HEADERS["Mecanicos"], {
@@ -289,7 +289,7 @@ def create_mecanico():
 @app.route('/api/mecanicos/<int:mid>', methods=['PUT'])
 def update_mecanico(mid):
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Mecanicos',), force_refresh=True)
     ws = wb["Mecanicos"]
     row = find_row_by_id(ws, mid)
     if not row:
@@ -310,7 +310,7 @@ def update_mecanico(mid):
 
 @app.route('/api/mecanicos/<int:mid>', methods=['DELETE'])
 def delete_mecanico(mid):
-    wb = get_wb()
+    wb = get_wb(('Mecanicos',), force_refresh=True)
     ws = wb["Mecanicos"]
     row = find_row_by_id(ws, mid)
     if row:
@@ -325,7 +325,7 @@ def delete_mecanico(mid):
 
 @app.route('/api/equipos', methods=['GET'])
 def list_equipos():
-    wb = get_wb()
+    wb = get_wb(('Equipos',))
     ws = wb["Equipos"]
     return jsonify(sheet_to_dicts(ws, SHEET_HEADERS["Equipos"]))
 
@@ -337,7 +337,7 @@ def create_equipo():
     m2 = (data.get("integrante2") or "").strip()
     if not m1 or not m2 or m1 == m2:
         return jsonify({"success": False, "error": "Selecciona dos mecánicos distintos"}), 400
-    wb = get_wb()
+    wb = get_wb(('Equipos',), force_refresh=True)
     ws = wb["Equipos"]
     eid = next_id(ws)
     append_row(ws, SHEET_HEADERS["Equipos"], {
@@ -355,7 +355,7 @@ def create_equipo():
 @app.route('/api/equipos/<int:eid>', methods=['PUT'])
 def update_equipo(eid):
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Equipos',), force_refresh=True)
     ws = wb["Equipos"]
     row = find_row_by_id(ws, eid)
     if not row:
@@ -375,7 +375,7 @@ def update_equipo(eid):
 
 @app.route('/api/equipos/<int:eid>', methods=['DELETE'])
 def delete_equipo(eid):
-    wb = get_wb()
+    wb = get_wb(('Equipos',), force_refresh=True)
     ws = wb["Equipos"]
     row = find_row_by_id(ws, eid)
     if row:
@@ -390,7 +390,7 @@ def delete_equipo(eid):
 
 @app.route('/api/trabajos', methods=['GET'])
 def list_trabajos():
-    wb = get_wb()
+    wb = get_wb(('Trabajos',))
     ws = wb["Trabajos"]
     data = sheet_to_dicts(ws, SHEET_HEADERS["Trabajos"])
     semana = request.args.get('semana')
@@ -417,7 +417,7 @@ def create_trabajo():
     print(f"\n[DEBUG] POST /api/trabajo recibido: {data}")
     print(f"[DEBUG] data.get('factura_cancelada') = {data.get('factura_cancelada')!r} (tipo {type(data.get('factura_cancelada')).__name__}) -> se guardará como: {factura_cancelada!r}\n")
 
-    wb = get_wb()
+    wb = get_wb(('Trabajos', 'Equipos'), force_refresh=True)
     ws = wb["Trabajos"]
 
     base = {
@@ -477,7 +477,7 @@ def create_trabajo():
 @app.route('/api/trabajo/<int:tid>', methods=['PUT'])
 def update_trabajo(tid):
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Trabajos',), force_refresh=True)
     ws = wb["Trabajos"]
     row = find_row_by_id(ws, tid)
     if not row:
@@ -504,7 +504,7 @@ def update_trabajo(tid):
 
 @app.route('/api/trabajo/<int:tid>/factura', methods=['POST'])
 def marcar_factura_cancelada(tid):
-    wb = get_wb()
+    wb = get_wb(('Trabajos',), force_refresh=True)
     ws = wb["Trabajos"]
     headers = SHEET_HEADERS["Trabajos"]
     row = find_row_by_id(ws, tid)
@@ -531,7 +531,7 @@ def marcar_factura_cancelada(tid):
 
 @app.route('/api/trabajo/<int:tid>', methods=['DELETE'])
 def delete_trabajo(tid):
-    wb = get_wb()
+    wb = get_wb(('Trabajos',), force_refresh=True)
     ws = wb["Trabajos"]
     headers = SHEET_HEADERS["Trabajos"]
     row = find_row_by_id(ws, tid)
@@ -1187,7 +1187,7 @@ def aplicar_descuento_nomina():
         except (TypeError, ValueError):
             return jsonify({'success': False, 'error': 'El préstamo seleccionado no es válido'}), 400
 
-    wb = get_wb()
+    wb = get_wb(SHEETS_PRESTAMOS_PANEL, force_refresh=True)
     loans = _loan_records(wb)
     loan = next((p for p in loans if p['id'] == loan_id), None) if loan_id else None
     if loan_id and not loan:
@@ -1237,7 +1237,7 @@ def pagar_nomina():
     if not mecanico or not semana:
         return jsonify({"success": False, "error": "Falta mecánico o semana"}), 400
 
-    wb = get_wb()
+    wb = get_wb(SHEETS_PAGAR_NOMINA, force_refresh=True)
     ws = wb["Trabajos"]
     headers = SHEET_HEADERS["Trabajos"]
     fecha_pago = datetime.now().strftime("%Y-%m-%d")
@@ -1293,7 +1293,7 @@ def pagar_nomina():
 
 @app.route('/api/pagos', methods=['GET'])
 def list_pagos():
-    wb = get_wb()
+    wb = get_wb(('Pagos',))
     ws = wb["Pagos"]
     data = sheet_to_dicts(ws, SHEET_HEADERS["Pagos"])
     data.sort(key=lambda d: d.get("ID") or 0, reverse=True)
@@ -1306,13 +1306,18 @@ def list_pagos():
 
 @app.route('/api/gastos', methods=['GET'])
 def list_gastos():
-    wb = get_wb()
-    ws = wb["Gastos"]
-    data = sheet_to_dicts(ws, SHEET_HEADERS["Gastos"])
+    # La vista normal es diaria. El histórico solo se solicita explícitamente.
     fecha = request.args.get('fecha')
     desde = request.args.get('desde')
     hasta = request.args.get('hasta')
     categoria = request.args.get('categoria')
+    historico = request.args.get('historico') == '1'
+    if not historico and not fecha and not desde and not hasta:
+        fecha = datetime.now().strftime("%Y-%m-%d")
+
+    wb = get_wb(('Gastos',), force_refresh=request.args.get('refresh') == '1')
+    ws = wb["Gastos"]
+    data = sheet_to_dicts(ws, SHEET_HEADERS["Gastos"])
     if fecha:
         data = [d for d in data if d.get("Fecha") == fecha]
     if desde:
@@ -1328,7 +1333,7 @@ def list_gastos():
 @app.route('/api/gasto', methods=['POST'])
 def create_gasto():
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Gastos',), force_refresh=True)
     ws = wb["Gastos"]
     gid = next_id(ws)
     append_row(ws, SHEET_HEADERS["Gastos"], {
@@ -1346,7 +1351,7 @@ def create_gasto():
 
 @app.route('/api/gasto/<int:gid>', methods=['DELETE'])
 def delete_gasto(gid):
-    wb = get_wb()
+    wb = get_wb(('Gastos',), force_refresh=True)
     ws = wb["Gastos"]
     row = find_row_by_id(ws, gid)
     if row:
@@ -1358,7 +1363,7 @@ def delete_gasto(gid):
 @app.route('/api/gastos/resumen', methods=['GET'])
 def resumen_gastos():
     fecha = request.args.get('fecha', datetime.now().strftime("%Y-%m-%d"))
-    wb = get_wb()
+    wb = get_wb(('Gastos',), force_refresh=request.args.get('refresh') == '1')
     ws = wb["Gastos"]
     data = sheet_to_dicts(ws, SHEET_HEADERS["Gastos"])
 
@@ -1385,7 +1390,7 @@ def resumen_gastos():
 
 @app.route('/api/herramientas', methods=['GET'])
 def list_herramientas():
-    wb = get_wb()
+    wb = get_wb(('Herramientas',))
     ws = wb["Herramientas"]
     data = sheet_to_dicts(ws, SHEET_HEADERS["Herramientas"])
     estado = request.args.get('estado')
@@ -1398,7 +1403,7 @@ def list_herramientas():
 @app.route('/api/herramienta', methods=['POST'])
 def create_herramienta():
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Herramientas',), force_refresh=True)
     ws = wb["Herramientas"]
     hid = next_id(ws)
     append_row(ws, SHEET_HEADERS["Herramientas"], {
@@ -1418,7 +1423,7 @@ def create_herramienta():
 @app.route('/api/herramienta/<int:hid>', methods=['PUT'])
 def update_herramienta(hid):
     data = request.json
-    wb = get_wb()
+    wb = get_wb(('Herramientas',), force_refresh=True)
     ws = wb["Herramientas"]
     row = find_row_by_id(ws, hid)
     if not row:
@@ -1442,7 +1447,7 @@ def update_herramienta(hid):
 
 @app.route('/api/herramienta/<int:hid>', methods=['DELETE'])
 def delete_herramienta(hid):
-    wb = get_wb()
+    wb = get_wb(('Herramientas',), force_refresh=True)
     ws = wb["Herramientas"]
     row = find_row_by_id(ws, hid)
     if row:

@@ -469,14 +469,17 @@
   </div>
 
   <div class="card">
-    <div class="card-header">HISTORIAL DE GASTOS
+    <div class="card-header">GASTOS DEL DÍA / HISTÓRICO
       <div class="spacer">
-        <input class="filter" type="date" id="filtroDesde">
-        <input class="filter" type="date" id="filtroHasta">
+        <input class="filter" type="date" id="filtroDesde" aria-label="Desde">
+        <input class="filter" type="date" id="filtroHasta" aria-label="Hasta">
         <select class="filter" id="filtroCategoria"><option value="">Todas las categorías</option>{% for c in categorias %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
-        <button class="btn btn-sm btn-dark" onclick="cargarGastos()">Filtrar</button>
+        <button class="btn btn-sm btn-dark" onclick="cargarGastos({ force: true })">Filtrar / actualizar</button>
+        <button class="btn btn-sm btn-gray" onclick="mostrarTodosLosGastos()">Ver todo</button>
+        <button class="btn btn-sm btn-gray" onclick="mostrarGastosHoy()">Hoy</button>
       </div>
     </div>
+    <div class="hint" style="padding:10px 16px 0">La vista predeterminada muestra únicamente los gastos de hoy. Usa «Ver todo» para consultar el histórico completo.</div>
     <div class="card-body">
       <div class="table-wrap">
         <table>
@@ -554,7 +557,9 @@ function showToast(msg, isError) {
 // después de una escritura.
 const pendingReads = new Map();
 const responseCache = new Map();
-const PANEL_CACHE_TTL_MS = 8000;
+// Las lecturas permanecen en caché durante la sesión y se invalidan después de cambios.
+const READ_CACHE_TTL_MS = Number.POSITIVE_INFINITY;
+const PANEL_CACHE_TTL_MS = READ_CACHE_TTL_MS;
 function readJSON(url) {
   if (pendingReads.has(url)) return pendingReads.get(url);
   const promise = fetch(url, { cache: 'no-store' }).then(async res => {
@@ -567,7 +572,8 @@ function readJSON(url) {
   pendingReads.set(url, promise);
   return promise;
 }
-function readCachedJSON(url, key = url, ttl = PANEL_CACHE_TTL_MS) {
+function readCachedJSON(url, key = url, ttl = READ_CACHE_TTL_MS, force = false) {
+  if (force) responseCache.delete(key);
   const cached = responseCache.get(key);
   if (cached && Date.now() - cached.at < ttl) return Promise.resolve(cached.data);
   const promise = readJSON(url).then(data => {
@@ -582,6 +588,32 @@ function invalidateReadCache(prefix) {
   }
 }
 
+// Cada pestaña se carga una sola vez por sesión. Una escritura o actualización
+// explícita elimina la marca y fuerza únicamente el panel afectado.
+const loadedTabs = new Set();
+const tabInFlight = new Map();
+const tabLoaders = {
+  resumen: () => cargarResumen(),
+  mecanicos: () => Promise.all([cargarMecanicos(), cargarEquipos()]),
+  trabajos: () => Promise.all([cargarMecanicosSelect(), cargarEquiposSelect(), cargarNomina(), cargarTrabajos()]),
+  prestamos: () => Promise.all([cargarPrestamoMecanicos(), cargarPanelPrestamos()]),
+  deudas: () => cargarPanelDeudas(),
+  gastos: () => cargarGastos(),
+  herramientas: () => Promise.all([cargarHerramientasSelectMec(), cargarHerramientas()]),
+};
+async function cargarTabUnaVez(tabName, force = false) {
+  if (!force && loadedTabs.has(tabName)) return;
+  if (tabInFlight.has(tabName)) return tabInFlight.get(tabName);
+  const loader = tabLoaders[tabName];
+  if (!loader) return;
+  const promise = Promise.resolve(loader()).then(() => loadedTabs.add(tabName)).finally(() => tabInFlight.delete(tabName));
+  tabInFlight.set(tabName, promise);
+  return promise;
+}
+function invalidarPestanas(...tabs) {
+  tabs.forEach(tab => loadedTabs.delete(tab));
+}
+
 // ---------- Tabs ----------
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -589,13 +621,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-    if (tab.dataset.tab === 'resumen') cargarResumen();
-    if (tab.dataset.tab === 'mecanicos') { cargarMecanicos(); cargarEquipos(); }
-    if (tab.dataset.tab === 'trabajos') { cargarMecanicosSelect(); cargarEquiposSelect(); cargarNomina(); cargarTrabajos(); }
-    if (tab.dataset.tab === 'prestamos') { cargarPrestamoMecanicos(); cargarPanelPrestamos(); }
-    if (tab.dataset.tab === 'deudas') cargarPanelDeudas();
-    if (tab.dataset.tab === 'gastos') cargarGastos();
-    if (tab.dataset.tab === 'herramientas') { cargarHerramientasSelectMec(); cargarHerramientas(); }
+    cargarTabUnaVez(tab.dataset.tab);
   });
 });
 
@@ -1445,19 +1471,28 @@ async function crearGasto() {
   document.getElementById('gCategoriaCustomWrap').style.display = 'none';
   document.getElementById('gCategoria').value = '{{ categorias[0] }}';
   showToast('Gasto registrado');
-  cargarGastos(); cargarResumen();
+  invalidateReadCache('gastos:');
+  invalidateReadCache(APP_BASE + '/api/gastos/resumen');
+  invalidarPestanas('gastos', 'resumen');
+  await cargarGastos({ force: true, all: false });
+  await cargarResumen({ force: true });
 }
 
-async function cargarGastos() {
+let gastosMostrarTodo = false;
+async function cargarGastos({ force = false, all = gastosMostrarTodo } = {}) {
   const params = new URLSearchParams();
   const desde = document.getElementById('filtroDesde').value;
   const hasta = document.getElementById('filtroHasta').value;
   const cat = document.getElementById('filtroCategoria').value;
-  if (desde) params.set('desde', desde);
-  if (hasta) params.set('hasta', hasta);
+  gastosMostrarTodo = all;
+  if (all && !desde && !hasta) params.set('historico', '1');
+  else {
+    if (desde) params.set('desde', desde);
+    if (hasta) params.set('hasta', hasta);
+  }
   if (cat) params.set('categoria', cat);
-  const res = await fetch(APP_BASE + '/api/gastos?' + params.toString());
-  const data = await res.json();
+  const url = APP_BASE + '/api/gastos?' + params.toString();
+  const data = await readCachedJSON(url, 'gastos:' + params.toString(), READ_CACHE_TTL_MS, force);
   const tbody = document.getElementById('tblGastos');
   if (!data.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Sin gastos registrados</td></tr>'; return; }
   tbody.innerHTML = data.map(g => `
@@ -1472,15 +1507,36 @@ async function cargarGastos() {
     </tr>`).join('');
 }
 
+async function mostrarTodosLosGastos() {
+  document.getElementById('filtroDesde').value = '';
+  document.getElementById('filtroHasta').value = '';
+  gastosMostrarTodo = true;
+  await cargarGastos({ force: true, all: true });
+}
+async function mostrarGastosHoy() {
+  const hoy = todayStr();
+  document.getElementById('filtroDesde').value = hoy;
+  document.getElementById('filtroHasta').value = hoy;
+  gastosMostrarTodo = false;
+  await cargarGastos({ force: true, all: false });
+}
+
 async function eliminarGasto(id) {
   if (!confirm('¿Eliminar este gasto?')) return;
-  await fetch(`${APP_BASE}/api/gasto/${id}`, { method: 'DELETE' });
-  cargarGastos(); cargarResumen();
+  const res = await fetch(`${APP_BASE}/api/gasto/${id}`, { method: 'DELETE' });
+  if (!res.ok) { showToast('No se pudo eliminar el gasto', true); return; }
+  invalidateReadCache('gastos:');
+  invalidateReadCache(APP_BASE + '/api/gastos/resumen');
+  invalidarPestanas('gastos', 'resumen');
+  showToast('Gasto eliminado');
+  await cargarGastos({ force: true });
+  await cargarResumen({ force: true });
 }
 
 // ---------- Resumen ----------
-async function cargarResumen() {
-  const data = await readJSON(APP_BASE + '/api/gastos/resumen?fecha=' + todayStr());
+async function cargarResumen({ force = false } = {}) {
+  const resumenUrl = APP_BASE + '/api/gastos/resumen?fecha=' + todayStr();
+  const data = await readCachedJSON(resumenUrl, 'resumen:gastos:' + todayStr(), READ_CACHE_TTL_MS, force);
   document.getElementById('kpiGastosHoy').textContent = fmt(data.total_hoy);
   document.getElementById('kpiGastosMes').textContent = fmt(data.total_mes);
 
@@ -1490,8 +1546,7 @@ async function cargarResumen() {
   else { tbody.innerHTML = cats.map(([c, v]) => `<tr><td>${c}</td><td>${fmt(v)}</td></tr>`).join(''); }
 
   document.getElementById('kpiNominaPend').textContent = '—';
-
-  const mecs = await readJSON(APP_BASE + '/api/mecanicos');
+  const mecs = await readCachedJSON(APP_BASE + '/api/mecanicos', 'mecanicos:resumen', READ_CACHE_TTL_MS);
   document.getElementById('kpiMecActivos').textContent = mecs.filter(m => m['Activo'] !== 'No').length;
 }
 
@@ -1563,8 +1618,10 @@ async function eliminarHerramienta(id) {
 }
 
 // ---------- Init ----------
-document.getElementById('trFecha').value = todayStr();
-document.getElementById('gFecha').value = todayStr();
+  document.getElementById('trFecha').value = todayStr();
+  document.getElementById('gFecha').value = todayStr();
+  document.getElementById('filtroDesde').value = todayStr();
+  document.getElementById('filtroHasta').value = todayStr();
 document.getElementById('herFecha').value = todayStr();
 document.getElementById('pFecha').value = todayStr();
 document.getElementById('kpiNominaPend').textContent = '—';

@@ -95,7 +95,7 @@ def _copiar_formato(origen, destino):
 def _precio_de_inventario(producto):
     """Devuelve (precio, ganUnit) desde la hoja Inventario."""
     try:
-        wb = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True)
+        wb = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True, sheet_titles=('Inventario',))
         ws = wb['Inventario']
         for row in ws.iter_rows(min_row=2, values_only=True):
             if _at(row, 0) and str(_at(row, 0)) == producto:
@@ -116,7 +116,7 @@ def leer_ventas(prods_base=None):
     precio y total desde el inventario base para que el dashboard
     muestre valores correctos inmediatamente.
     """
-    wb     = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True)
+    wb     = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True, sheet_titles=('Ventas',))
     ws     = wb['Ventas']
     ventas = []
 
@@ -166,7 +166,7 @@ def leer_ventas(prods_base=None):
 
 
 def leer_inventario_base():
-    wb       = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True)
+    wb       = load_workbook_for_app(EXCEL_PATH, data_only=True, read_only=True, sheet_titles=('Inventario',))
     ws       = wb['Inventario']
     prods    = []
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -221,7 +221,7 @@ def agregar_producto(producto, costo, precio, stock_inicial, stock_minimo):
         stock_inicial = _numero_no_negativo(stock_inicial, 'Stock inicial', entero=True)
         stock_minimo = _numero_no_negativo(stock_minimo, 'Stock mínimo', entero=True)
 
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Inventario',))
         ws = wb['Inventario']
         nombres_existentes = {
             str(ws.cell(row=row_number, column=1).value).strip().casefold()
@@ -375,7 +375,7 @@ def editar_producto(producto_original, producto, costo, precio, stock_inicial, s
 
     wb = None
     try:
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Inventario', 'Ventas'))
         ws = wb['Inventario']
         ws_ventas = wb['Ventas']
         fila = _fila_inventario(ws, original)
@@ -420,7 +420,7 @@ def ajustar_existencias(producto, stock_actual):
 
     wb = None
     try:
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Inventario', 'Ventas'))
         ws = wb['Inventario']
         ws_ventas = wb['Ventas']
         fila = _fila_inventario(ws, nombre)
@@ -454,7 +454,7 @@ def eliminar_producto(producto):
 
     wb = None
     try:
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Inventario', 'Ventas'))
         ws = wb['Inventario']
         ws_ventas = wb['Ventas']
         fila = _fila_inventario(ws, nombre)
@@ -561,7 +561,7 @@ def agregar_fila_venta(cliente, producto, cantidad, metodo, pago):
     """
     try:
         # Cargar SIN data_only para preservar las fórmulas existentes
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Ventas',))
         ws = wb['Ventas']
 
         fila      = _primera_fila_vacia(ws)
@@ -615,7 +615,7 @@ def agregar_filas_venta(cliente, items, metodo, pago):
     Excel una sola vez para todas las filas.
     """
     try:
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Ventas', 'Inventario'))
         ws = wb['Ventas']
         ws_inv = wb['Inventario']
 
@@ -682,7 +682,7 @@ def agregar_filas_venta(cliente, items, metodo, pago):
 def marcar_venta_pagada(num):
     """Marca la venta como pagada. Solo toca cols J y K."""
     try:
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Ventas',))
         ws = wb['Ventas']
 
         # ── CORRECCIÓN ────────────────────────────────────────────
@@ -735,7 +735,7 @@ def cobrar_deuda_cliente(cliente, monto):
     wb = None
     try:
         # Una sola carga lógica del libro y un solo save al finalizar.
-        wb = load_workbook_for_app(EXCEL_PATH)
+        wb = load_workbook_for_app(EXCEL_PATH, sheet_titles=('Ventas', 'Inventario'))
         ws_ventas = wb['Ventas']
         ws_inv = wb['Inventario']
 
@@ -1094,7 +1094,7 @@ def lista_clientes():
     No usa read_only para evitar que openpyxl corte el max_row antes de tiempo.
     """
     try:
-        wb = load_workbook_for_app(EXCEL_PATH, data_only=True)
+        wb = load_workbook_for_app(EXCEL_PATH, data_only=True, sheet_titles=('Clientes',))
         ws = wb['Clientes']
         nombres = []
         for row in ws.iter_rows(min_row=2, min_col=1, max_col=1):

@@ -50,7 +50,7 @@ ITEMS_PERITAJE = [
 ESTADOS = ["Bueno", "Regular", "Malo", "No aplica"]
 
 def get_next_number():
-    wb = load_workbook_for_app(EXCEL_FILE, data_only=True, read_only=True)
+    wb = load_workbook_for_app(EXCEL_FILE, data_only=True, read_only=True, sheet_titles=('Peritajes',))
     try:
         ws = wb['Peritajes'] if 'Peritajes' in wb.sheetnames else wb.active
         return max((ws.max_row or 1), 1)  # encabezado ocupa la fila 1
@@ -58,7 +58,7 @@ def get_next_number():
         wb.close()
 
 def save_peritaje(data):
-    wb = load_workbook_for_app(EXCEL_FILE)
+    wb = load_workbook_for_app(EXCEL_FILE, sheet_titles=('Peritajes',))
     ws = wb['Peritajes'] if 'Peritajes' in wb.sheetnames else wb.create_sheet('Peritajes')
 
     items = data.get("items", {})
@@ -132,7 +132,7 @@ def save_peritaje(data):
     return num_peritaje
 
 def get_all_peritajes():
-    wb = load_workbook_for_app(EXCEL_FILE, data_only=True, read_only=True)
+    wb = load_workbook_for_app(EXCEL_FILE, data_only=True, read_only=True, sheet_titles=('Peritajes',))
     try:
         ws = wb['Peritajes'] if 'Peritajes' in wb.sheetnames else wb.active
         headers = [cell.value for cell in ws[1]] if ws.max_column else []
