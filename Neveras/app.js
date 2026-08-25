@@ -6,6 +6,42 @@ let D = { ventas: [], inventario: [], clientes: [] };
 
 const $ = id => document.getElementById(id);
 const fmt = n => '$' + Number(n || 0).toLocaleString('es-CO');
+const COBRO_EPSILON = 0.005;
+
+function montoPagadoVenta(venta) {
+  const pagado = Number(venta && venta.pagado);
+  if (Number.isFinite(pagado)) return Math.max(0, pagado);
+  return String(venta && venta.pago || '').toUpperCase() === 'SI'
+    ? Math.max(0, Number(venta && venta.total) || 0)
+    : 0;
+}
+
+function montoSaldoVenta(venta) {
+  const saldo = Number(venta && venta.saldo);
+  if (Number.isFinite(saldo)) return Math.max(0, saldo);
+  return Math.max(0, (Number(venta && venta.total) || 0) - montoPagadoVenta(venta));
+}
+
+function ventaTieneSaldo(venta) {
+  return montoSaldoVenta(venta) > COBRO_EPSILON;
+}
+
+function parseMontoInput(valor) {
+  let texto = String(valor ?? '').trim().replace(/\s/g, '');
+  if (!texto) return NaN;
+  const ultimaComa = texto.lastIndexOf(',');
+  const ultimoPunto = texto.lastIndexOf('.');
+  if (ultimaComa >= 0 && ultimoPunto >= 0) {
+    if (ultimaComa > ultimoPunto) texto = texto.replace(/\./g, '').replace(',', '.');
+    else texto = texto.replace(/,/g, '');
+  } else if (ultimaComa >= 0) {
+    texto = texto.replace(',', '.');
+  } else if ((texto.match(/\./g) || []).length > 1) {
+    texto = texto.replace(/\./g, '');
+  }
+  return Number(texto);
+}
+
 let CH = {};
 
 // ── NAVEGACIÓN POR TABS ───────────────────────────────────────
@@ -20,11 +56,11 @@ function tab(id, btn) {
 function rDash() {
   const v  = D.ventas;
   const tV = v.reduce((s, r) => s + r.total, 0);
-  const tC = v.filter(r => r.pago === 'SI').reduce((s, r) => s + r.total, 0);
-  const tD = v.filter(r => r.pago === 'NO').reduce((s, r) => s + r.total, 0);
+  const tC = v.reduce((s, r) => s + montoPagadoVenta(r), 0);
+  const tD = v.reduce((s, r) => s + montoSaldoVenta(r), 0);
   const tG = v.reduce((s, r) => s + r.ganancia, 0);
-  const nPag  = v.filter(r => r.pago === 'SI').length;
-  const nPen  = v.filter(r => r.pago === 'NO').length;
+  const nPag  = v.filter(r => !ventaTieneSaldo(r)).length;
+  const nPen  = v.filter(ventaTieneSaldo).length;
   const tInv  = D.inventario.reduce((s, i) => s + (i.costo * Math.max(0, i.stockAct)), 0);
   const nAg   = D.inventario.filter(i => i.estado.includes('AGOTADO')).length;
 
@@ -32,8 +68,8 @@ function rDash() {
 
   const kpis = [
     { l: 'Total Ventas',       v: fmt(tV), s: v.length + ' transacciones', i: '💰', c: 'var(--ac)' },
-    { l: 'Total Cobrado',      v: fmt(tC), s: nPag + ' ventas pagadas',     i: '✅', c: 'var(--ac)' },
-    { l: 'Deudas Pendientes',  v: fmt(tD), s: nPen + ' créditos',           i: '🔴', c: 'var(--rd)' },
+    { l: 'Total Cobrado',      v: fmt(tC), s: nPag + ' ventas sin saldo',     i: '✅', c: 'var(--ac)' },
+    { l: 'Deudas Pendientes',  v: fmt(tD), s: nPen + ' créditos con saldo',     i: '🔴', c: 'var(--rd)' },
     { l: 'Ganancia Total',     v: fmt(tG), s: ((tG / (tV || 1)) * 100).toFixed(1) + '% margen', i: '📈', c: 'var(--yw)' },
     { l: 'Valor Inventario',   v: fmt(tInv), s: D.inventario.length + ' productos', i: '📦', c: 'var(--bl)' },
     { l: 'Productos Agotados', v: nAg,     s: 'Requieren surtir',           i: '⚠️', c: 'var(--yw)' },
@@ -132,13 +168,13 @@ function rVentas() {
     v = v.filter(r => r.cliente.toUpperCase().includes(q));
   }
   if (filtroVentas.soloDeudas) {
-    v = v.filter(r => r.pago === 'NO');
+    v = v.filter(ventaTieneSaldo);
   }
 
   const hasFiltro  = filtroVentas.texto || filtroVentas.soloDeudas;
   const tTotal     = v.reduce((s, r) => s + r.total,   0);
-  const tCobrado   = v.filter(r => r.pago === 'SI').reduce((s, r) => s + r.total, 0);
-  const tPendiente = v.filter(r => r.pago === 'NO').reduce((s, r) => s + r.total, 0);
+  const tCobrado   = v.reduce((s, r) => s + montoPagadoVenta(r), 0);
+  const tPendiente = v.reduce((s, r) => s + montoSaldoVenta(r), 0);
 
   $('v-sub').textContent = todos.length + ' transacciones · Total: ' + fmt(todos.reduce((s, r) => s + r.total, 0));
   $('v-cnt').textContent = (hasFiltro ? v.length + ' de ' + todos.length : v.length) + ' registros';
@@ -510,7 +546,7 @@ function abrirCobroDeuda(cliente, deudaTotal) {
   $('cobro-cliente').textContent = cobroActual.cliente;
   $('cobro-monto').value = deuda.toFixed(2);
   $('cobro-monto').max = deuda.toFixed(2);
-  $('cobro-ayuda').textContent = `Total pendiente: ${fmt(deuda)}. Para un cobro parcial, edita el monto sin superar este saldo.`;
+  $('cobro-ayuda').textContent = `Total pendiente: ${fmt(deuda)}. Acepta cualquier abono mayor que cero y menor o igual a este saldo. Se aplica primero a la venta más antigua.`;
   $('cobro-overlay').classList.add('open');
   $('cobro-monto').focus();
   $('cobro-monto').select();
@@ -528,14 +564,14 @@ async function confirmarCobroDeuda() {
     return;
   }
 
-  const montoTexto = $('cobro-monto').value.trim().replace(',', '.');
-  const monto = Number(montoTexto);
+  const montoTexto = $('cobro-monto').value.trim();
+  const monto = parseMontoInput(montoTexto);
   const deuda = cobroActual.deuda;
   if (!montoTexto || !Number.isFinite(monto) || monto <= 0) {
     toast('⚠️ Escribe un monto mayor que cero', true);
     return;
   }
-  if (monto > deuda + 0.005) {
+  if (monto > deuda + COBRO_EPSILON) {
     toast(`⚠️ El monto no puede superar la deuda de ${fmt(deuda)}`, true);
     return;
   }

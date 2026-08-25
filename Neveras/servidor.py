@@ -136,6 +136,7 @@ def leer_ventas(prods_base=None):
         precio   = _as_float(_at(row, 6))
         total    = _as_float(_at(row, 7))
         ganancia = _as_float(_at(row, 11))
+        abonado = _as_float(_at(row, 12))
 
         # Si las fórmulas aún no tienen valor cacheado, calcular desde inventario
         if precio == 0 and producto in precio_idx:
@@ -143,22 +144,30 @@ def leer_ventas(prods_base=None):
             total    = cantidad * precio
             ganancia = round(cantidad * ganUnit, 2)
 
+        pago = 'SI' if str(_at(row, 9) or '').upper() == 'SI' else 'NO'
+        # Ventas antiguas no tienen Monto Abonado: una venta marcada SI se
+        # considera pagada por su total; las nuevas pueden conservar abonos.
+        pagado = total if pago == 'SI' else min(max(abonado, 0.0), max(total, 0.0))
+        saldo = round(max(total - pagado, 0.0), 2)
+        if saldo <= 0.005 and total > 0:
+            pago = 'SI'
+            pagado = total
+
         ventas.append({
             'num':      int(num) if num else len(ventas) + 1,
-                        'fecha':     str(_at(row, 1) or '')[:10],
-
-                        'hora':      str(_at(row, 2) or ''),
-            'cliente':   str(_at(row, 3) or '').upper(),
-
+            'fecha':    str(_at(row, 1) or '')[:10],
+            'hora':     str(_at(row, 2) or ''),
+            'cliente':  str(_at(row, 3) or '').upper(),
             'producto': producto,
             'cantidad': cantidad,
             'precio':   precio,
             'total':    total,
-                        'metodo':    str(_at(row, 8) or ''),
-            'pago':      'SI' if str(_at(row, 9) or '').upper() == 'SI' else 'NO',
-            'estado':    str(_at(row, 10) or ''),
-
+            'metodo':   str(_at(row, 8) or ''),
+            'pago':     pago,
+            'estado':   str(_at(row, 10) or ''),
             'ganancia': ganancia,
+            'pagado':   round(pagado, 2),
+            'saldo':    saldo,
         })
 
     wb.close()
@@ -510,8 +519,7 @@ def calcular_inventario_y_clientes(ventas, prods_base):
         if cli not in cli_dict:
             cli_dict[cli] = {'comprado': 0, 'pagado': 0, 'compras': 0}
         cli_dict[cli]['comprado'] += v['total']
-        if v['pago'] == 'SI':
-            cli_dict[cli]['pagado'] += v['total']
+        cli_dict[cli]['pagado'] += v.get('pagado', v['total'] if v['pago'] == 'SI' else 0.0)
         cli_dict[cli]['compras'] += 1
 
     clientes = [{
@@ -580,6 +588,7 @@ def agregar_fila_venta(cliente, producto, cantidad, metodo, pago):
             9:  metodo,                       # Método Pago
             10: pago.upper(),                 # Pagó
             11: estado,                       # Estado Pago
+            13: f'=H{fila}' if pago.upper() == 'SI' else 0.0,
         }
 
         for col, valor in valores.items():
@@ -659,6 +668,7 @@ def agregar_filas_venta(cliente, items, metodo, pago):
                 9:  metodo,                       # Método Pago
                 10: pago.upper(),                 # Pagó
                 11: estado,                       # Estado Pago
+                13: f'=H{fila}' if pago.upper() == 'SI' else 0.0,
             }
 
             for col, valor in valores.items():
@@ -702,6 +712,8 @@ def marcar_venta_pagada(num):
 
         ws.cell(row=fila, column=10).value = 'SI'
         ws.cell(row=fila, column=11).value = '✅ PAGADO'
+        total = _as_float(ws.cell(row=fila, column=8).value)
+        ws.cell(row=fila, column=13).value = total if total > 0 else f'=H{fila}'
         wb.save(EXCEL_PATH)
         wb.close()
         return True, None
@@ -713,19 +725,31 @@ def marcar_venta_pagada(num):
 
 
 def cobrar_deuda_cliente(cliente, monto):
-    """Cobra ventas pendientes completas de un cliente, total o parcialmente.
+    """Registra un cobro total o parcial de las ventas pendientes de un cliente.
 
-    El cobro parcial se aplica en orden cronológico y nunca divide una venta:
-    se marcan tantas ventas completas como permita el monto recibido. Si el
-    importe es menor que la primera venta pendiente, se devuelve un error para
-    evitar registrar un cobro ambiguo.
+    Los abonos se aplican en orden cronológico y pueden ser de cualquier valor
+    positivo hasta el saldo total, incluso menor que una venta individual. El
+    abono acumulado se guarda en la columna Monto Abonado para conservar el
+    saldo de cada venta y permitir nuevos cobros posteriores.
     """
     nombre = str(cliente or '').strip().upper()
     if not nombre:
         return False, 'El cliente es obligatorio', None
 
     try:
-        monto = float(monto)
+        if isinstance(monto, str):
+            texto_monto = monto.strip().replace('$', '').replace(' ', '')
+            # Acepta 4000,00 y también 4.000,00; conserva 4000.00.
+            if ',' in texto_monto and '.' in texto_monto:
+                if texto_monto.rfind(',') > texto_monto.rfind('.'):
+                    texto_monto = texto_monto.replace('.', '').replace(',', '.')
+                else:
+                    texto_monto = texto_monto.replace(',', '')
+            else:
+                texto_monto = texto_monto.replace(',', '.')
+            monto = float(texto_monto)
+        else:
+            monto = float(monto)
     except (TypeError, ValueError):
         return False, 'El monto debe ser numérico', None
     if monto != monto or monto in (float('inf'), float('-inf')) or monto <= 0:
@@ -775,38 +799,68 @@ def cobrar_deuda_cliente(cliente, monto):
             except (TypeError, ValueError):
                 numero = fila_num - 1
 
-            pendientes.append({'fila': fila_num, 'num': numero, 'total': total})
-            deuda_total += total
+            abonado = _as_float(ws_ventas.cell(row=fila_num, column=13).value)
+            # Respaldos antiguos no tienen columna de abono; una venta marcada
+            # como pagada ya fue cobrada por su total y no entra en pendientes.
+            abonado = min(max(abonado, 0.0), total)
+            saldo = round(max(total - abonado, 0.0), 2)
+            if saldo <= 0.005:
+                ws_ventas.cell(row=fila_num, column=10).value = 'SI'
+                ws_ventas.cell(row=fila_num, column=11).value = '✅ PAGADO'
+                continue
+
+            pendientes.append({
+                'fila': fila_num,
+                'num': numero,
+                'total': total,
+                'abonado': abonado,
+                'saldo': saldo,
+            })
+            deuda_total += saldo
 
         deuda_total = round(deuda_total, 2)
         if not pendientes:
             return False, f'El cliente {nombre} no tiene deudas pendientes', None
-
-        # Cobro total o selección de ventas completas hasta agotar el monto.
-        seleccionadas = []
-        acumulado = 0.0
-        for venta in pendientes:
-            if monto >= deuda_total - 0.005:
-                seleccionadas.append(venta)
-                continue
-            if acumulado + venta['total'] <= monto + 0.005:
-                seleccionadas.append(venta)
-                acumulado += venta['total']
-            else:
-                break
-
-        if not seleccionadas:
-            primera = pendientes[0]['total']
+        if monto > deuda_total + 0.005:
             return False, (
-                f'El monto es menor que la primera venta pendiente '
-                f'({primera:.2f}). Para cobro parcial, ingresa al menos ese valor.'
+                f'El monto no puede superar la deuda total pendiente '
+                f'(${deuda_total:,.2f})'
             ), None
 
-        for venta in seleccionadas:
-            ws_ventas.cell(row=venta['fila'], column=10).value = 'SI'
-            ws_ventas.cell(row=venta['fila'], column=11).value = '✅ PAGADO'
+        # Distribución FIFO: cada peso del abono se aplica al saldo de la
+        # venta más antigua y puede dejarla parcialmente pagada.
+        monto_restante = monto
+        ventas_cobradas = []
+        ventas_abonadas = []
+        monto_aplicado = 0.0
+        for venta in pendientes:
+            if monto_restante <= 0.005:
+                break
+            aplicado = round(min(monto_restante, venta['saldo']), 2)
+            if aplicado <= 0:
+                continue
 
-        monto_aplicado = round(sum(v['total'] for v in seleccionadas), 2)
+            nuevo_abonado = round(venta['abonado'] + aplicado, 2)
+            nuevo_saldo = round(max(venta['total'] - nuevo_abonado, 0.0), 2)
+            ws_ventas.cell(row=venta['fila'], column=13).value = nuevo_abonado
+            if nuevo_saldo <= 0.005:
+                ws_ventas.cell(row=venta['fila'], column=10).value = 'SI'
+                ws_ventas.cell(row=venta['fila'], column=11).value = '✅ PAGADO'
+                ventas_cobradas.append(venta['num'])
+            else:
+                ws_ventas.cell(row=venta['fila'], column=10).value = 'NO'
+                ws_ventas.cell(row=venta['fila'], column=11).value = (
+                    f'🟡 ABONO ${nuevo_abonado:,.2f} | SALDO ${nuevo_saldo:,.2f}'
+                )
+
+            ventas_abonadas.append({
+                'num': venta['num'],
+                'montoAplicado': aplicado,
+                'saldo': nuevo_saldo,
+            })
+            monto_aplicado = round(monto_aplicado + aplicado, 2)
+            monto_restante = round(monto_restante - aplicado, 2)
+
         deuda_restante = round(max(0.0, deuda_total - monto_aplicado), 2)
         resultado = wb.save(EXCEL_PATH)
         if not resultado or not resultado.get('Ventas'):
@@ -818,7 +872,8 @@ def cobrar_deuda_cliente(cliente, monto):
             'montoAplicado': monto_aplicado,
             'deudaAnterior': deuda_total,
             'deudaRestante': deuda_restante,
-            'ventasCobradas': [v['num'] for v in seleccionadas],
+            'ventasCobradas': ventas_cobradas,
+            'ventasAfectadas': ventas_abonadas,
         }
         modalidad = 'total' if deuda_restante <= 0.005 else 'parcial'
         mensaje = (

@@ -61,7 +61,7 @@ CONTROL_HEADERS = {
 }
 
 NEVERAS_HEADERS = {
-    "Ventas": ["#", "Fecha", "Hora", "Cliente", "Producto", "Cantidad", "Precio Unit.", "Total", "Método Pago", "Pagó", "Estado Pago", "Ganancia"],
+    "Ventas": ["#", "Fecha", "Hora", "Cliente", "Producto", "Cantidad", "Precio Unit.", "Total", "Método Pago", "Pagó", "Estado Pago", "Ganancia", "Monto Abonado"],
     "Inventario": ["Producto", "Costo", "Precio Venta", "Ganancia Unit.", "Stock Inicial", "Stock Mín.", "Vendidos", "Stock Actual", "Estado", "Costo Total Inv.", "Ganancia x Producto"],
     "Clientes": ["Cliente", "Total Comprado", "Total Pagado", "Deuda Pendiente", "N° Compras", "Última Compra", "Estado"],
     "Deudas": ["Cliente", "Monto"],
@@ -297,7 +297,14 @@ def _ensure_required_sheets() -> None:
             and list(first_row[0][:10]) == list(headers[:10])
             and list(first_row[0][:len(headers)]) != list(headers)
         )
-        if not populated or needs_payments_upgrade or needs_deudas_type_upgrade:
+        # Ventas incorpora Monto Abonado al final. Las doce columnas anteriores
+        # no se desplazan para conservar ventas y fórmulas de respaldos antiguos.
+        needs_ventas_abono_upgrade = (
+            title == "Ventas" and populated
+            and list(first_row[0][:12]) == list(headers[:12])
+            and list(first_row[0][:len(headers)]) != list(headers)
+        )
+        if not populated or needs_payments_upgrade or needs_deudas_type_upgrade or needs_ventas_abono_upgrade:
             response = _execute(values_api.update(
                 spreadsheetId=_spreadsheet_id(),
                 range=f"{_quote_title(title)}!A1",
