@@ -129,7 +129,21 @@ function rDash() {
 }
 
 // ── FILTRO VENTAS ─────────────────────────────────────────────
-let filtroVentas = { texto: '', soloDeudas: false };
+function fechaLocalISO(fecha = new Date()) {
+  const pad = valor => String(valor).padStart(2, '0');
+  return `${fecha.getFullYear()}-${pad(fecha.getMonth() + 1)}-${pad(fecha.getDate())}`;
+}
+
+function textoFecha(iso) {
+  if (!iso) return 'todas las fechas';
+  const partes = String(iso).split('-').map(Number);
+  if (partes.length !== 3 || partes.some(Number.isNaN)) return iso;
+  return new Date(partes[0], partes[1] - 1, partes[2]).toLocaleDateString('es-CO', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  });
+}
+
+let filtroVentas = { texto: '', soloDeudas: false, fecha: fechaLocalISO() };
 
 function filtrarVentas(val) {
   filtroVentas.texto = val.trim();
@@ -137,63 +151,78 @@ function filtrarVentas(val) {
   rVentas();
 }
 
+function filtrarFechaVentas(val) {
+  filtroVentas.fecha = /^\d{4}-\d{2}-\d{2}$/.test(val) ? val : fechaLocalISO();
+  rVentas();
+}
+
+function irAVentasHoy() {
+  filtroVentas.fecha = fechaLocalISO();
+  const control = $('v-fecha');
+  if (control) control.value = filtroVentas.fecha;
+  rVentas();
+}
+
 function togglePendientes() {
   filtroVentas.soloDeudas = !filtroVentas.soloDeudas;
   const btn = $('btn-pendientes');
-  btn.style.background  = filtroVentas.soloDeudas ? 'var(--rd)' : 'var(--s2)';
-  btn.style.color       = filtroVentas.soloDeudas ? '#fff'      : 'var(--tm)';
-  btn.style.borderColor = filtroVentas.soloDeudas ? 'var(--rd)' : 'var(--br)';
+  btn.classList.toggle('active', filtroVentas.soloDeudas);
   rVentas();
 }
 
 function limpiarFiltroVentas() {
-  filtroVentas = { texto: '', soloDeudas: false };
+  filtroVentas = { texto: '', soloDeudas: false, fecha: fechaLocalISO() };
   $('v-buscar').value = '';
+  $('v-fecha').value = filtroVentas.fecha;
   $('v-clear').style.display = 'none';
   const btn = $('btn-pendientes');
-  btn.style.background  = 'var(--s2)';
-  btn.style.color       = 'var(--tm)';
-  btn.style.borderColor = 'var(--br)';
+  btn.classList.remove('active');
   rVentas();
 }
 
 // ── RENDER VENTAS ─────────────────────────────────────────────
 function rVentas() {
   const todos = D.ventas;
+  const hoy = fechaLocalISO();
+  const fechaSeleccionada = filtroVentas.fecha || hoy;
 
-  // Aplicar filtros
-  let v = todos;
+  // El calendario limita la vista a un día; después se aplican cliente y saldo.
+  let v = todos.filter(r => String(r.fecha || '').slice(0, 10) === fechaSeleccionada);
   if (filtroVentas.texto) {
     const q = filtroVentas.texto.toUpperCase();
-    v = v.filter(r => r.cliente.toUpperCase().includes(q));
+    v = v.filter(r => String(r.cliente || '').toUpperCase().includes(q));
   }
   if (filtroVentas.soloDeudas) {
     v = v.filter(ventaTieneSaldo);
   }
 
-  const hasFiltro  = filtroVentas.texto || filtroVentas.soloDeudas;
-  const tTotal     = v.reduce((s, r) => s + r.total,   0);
+  // Más reciente primero: fecha, hora y número de venta como desempate.
+  v.sort((a, b) => {
+    const fechaHoraA = `${a.fecha || ''} ${a.hora || ''}`;
+    const fechaHoraB = `${b.fecha || ''} ${b.hora || ''}`;
+    return fechaHoraB.localeCompare(fechaHoraA) || (Number(b.num) || 0) - (Number(a.num) || 0);
+  });
+
+  const tTotal     = v.reduce((s, r) => s + r.total, 0);
   const tCobrado   = v.reduce((s, r) => s + montoPagadoVenta(r), 0);
   const tPendiente = v.reduce((s, r) => s + montoSaldoVenta(r), 0);
+  const tituloFecha = fechaSeleccionada === hoy ? 'Ventas del día' : `Ventas del ${textoFecha(fechaSeleccionada)}`;
 
-  $('v-sub').textContent = todos.length + ' transacciones · Total: ' + fmt(todos.reduce((s, r) => s + r.total, 0));
-  $('v-cnt').textContent = (hasFiltro ? v.length + ' de ' + todos.length : v.length) + ' registros';
+  $('v-title').textContent = tituloFecha;
+  $('v-sub').textContent = `${v.length} ventas · ${textoFecha(fechaSeleccionada)} · Total: ${fmt(tTotal)}`;
+  $('v-cnt').textContent = v.length + ' registros';
 
-  // Resumen del filtro activo
   const info = $('v-filtro-info');
-  if (hasFiltro) {
-    info.style.display = 'block';
-    info.innerHTML = v.length === 0
-      ? `<span>Sin resultados para ese filtro</span>`
-      : `Mostrando <strong style="color:var(--ac)">${v.length}</strong> venta${v.length !== 1 ? 's' : ''}
-         &nbsp;·&nbsp; Total: <strong style="color:inherit">${fmt(tTotal)}</strong>
-         &nbsp;·&nbsp; Cobrado: <strong style="color:var(--ac)">${fmt(tCobrado)}</strong>`
-         + (tPendiente > 0
-           ? `&nbsp;·&nbsp; Pendiente: <strong style="color:var(--rd)">${fmt(tPendiente)}</strong>`
-           : '');
-  } else {
-    info.style.display = 'none';
-  }
+  info.style.display = 'block';
+  info.innerHTML = v.length === 0
+    ? `<span>No hay ventas registradas para ${textoFecha(fechaSeleccionada)}.</span>`
+    : `Mostrando <strong style="color:var(--ac)">${v.length}</strong> venta${v.length !== 1 ? 's' : ''}
+       &nbsp;·&nbsp; Total: <strong style="color:inherit">${fmt(tTotal)}</strong>
+       &nbsp;·&nbsp; Cobrado: <strong style="color:var(--ac)">${fmt(tCobrado)}</strong>`
+       + (tPendiente > 0
+         ? `&nbsp;·&nbsp; Pendiente: <strong style="color:var(--rd)">${fmt(tPendiente)}</strong>`
+         : '')
+       + (filtroVentas.soloDeudas ? '&nbsp;·&nbsp; Solo pendientes' : '');
 
   $('tv').querySelector('tbody').innerHTML = v.map(r =>
     `<tr>
@@ -899,6 +928,9 @@ async function eliminarProducto(producto) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────
+const fechaInicialVentas = fechaLocalISO();
+const controlFechaVentas = $('v-fecha');
+if (controlFechaVentas) controlFechaVentas.value = fechaInicialVentas;
 Chart.defaults.color        = '#6b7590';
 Chart.defaults.borderColor  = '#1e2330';
 Chart.defaults.font.family  = 'Space Grotesk';

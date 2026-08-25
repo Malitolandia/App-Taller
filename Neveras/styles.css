@@ -160,6 +160,44 @@ tr:hover td { background: rgba(255,255,255,.02); }
 }
 tr:last-child td { border-bottom: none; }
 
+/* ── FILTROS DE VENTAS ─────────────────────────── */
+.ventas-toolbar {
+  display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.ventas-search { position: relative; flex: 1 1 240px; min-width: 200px; }
+.ventas-search input { padding-left: 36px; padding-right: 36px; }
+.ventas-search-icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  pointer-events: none; opacity: .8;
+}
+.ventas-clear {
+  display: none; position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--tm); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 2px 4px;
+}
+.ventas-clear:hover { color: var(--tx); }
+.ventas-date-group { display: flex; align-items: flex-end; gap: 7px; }
+.ventas-date-group label {
+  align-self: center; margin: 0; white-space: nowrap; color: var(--tm);
+}
+.date-control { min-width: 145px; }
+.filter-reset, .filter-toggle {
+  min-height: 37px; padding: 9px 14px; border-radius: 8px;
+  border: 1px solid var(--br); background: var(--s2); color: var(--tm);
+  cursor: pointer; font-size: 13px; font-family: inherit; white-space: nowrap;
+  transition: all .2s;
+}
+.filter-reset { color: var(--ac); border-color: rgba(0,229,160,.28); }
+.filter-reset:hover { background: rgba(0,229,160,.12); transform: translateY(-1px); }
+.filter-toggle:hover { color: var(--tx); border-color: #2a3048; }
+.filter-toggle.active { background: var(--rd); color: #fff; border-color: var(--rd); }
+.ventas-filter-info {
+  display: block; background: var(--s2); border: 1px solid var(--br);
+  border-radius: 8px; padding: 10px 16px; margin-bottom: 14px;
+  font-size: 13px; color: var(--tm);
+}
+
 /* ── PILLS ────────────────────────────────────── */
 .pill {
   display: inline-flex; align-items: center;
@@ -234,10 +272,19 @@ tr:last-child td { border-bottom: none; }
 /* ── RESPONSIVE ───────────────────────────────── */
 @media (max-width: 768px) {
   header { padding: 12px 14px; }
+  header .hright { gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+  header .dbadge { display: none; }
+  header .upbtn { padding: 8px 10px; }
   main   { padding: 14px; }
   .tabs  { padding: 10px 14px 0; }
   .cgrid { grid-template-columns: 1fr; }
   .kgrid { grid-template-columns: repeat(2, 1fr); }
+  .ventas-toolbar { align-items: stretch; }
+  .ventas-search, .ventas-date-group { flex: 1 1 100%; }
+  .ventas-date-group { align-items: center; }
+  .ventas-date-group label { flex: 0 0 auto; }
+  .date-control { flex: 1; }
+  .filter-reset, .filter-toggle { flex: 1; }
 }
 
 /* ── ANIMACIONES ──────────────────────────────── */

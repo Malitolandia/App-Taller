@@ -85,25 +85,29 @@
     <div class="ssub" id="v-sub"></div>
 
     <!-- ── FILTROS ── -->
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-      <div style="position:relative;flex:1;min-width:200px">
-        <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none">🔍</span>
+    <div class="ventas-toolbar">
+      <div class="ventas-search">
+        <span class="ventas-search-icon" aria-hidden="true">🔍</span>
         <input id="v-buscar" type="text" placeholder="Buscar por cliente..."
-               oninput="filtrarVentas(this.value)"
-               style="width:100%;padding:9px 36px 9px 36px;background:var(--s2);border:1px solid var(--br);border-radius:8px;color:inherit;font-size:13px;font-family:inherit;box-sizing:border-box;outline:none">
-        <button id="v-clear" onclick="limpiarFiltroVentas()"
-                style="display:none;position:absolute;right:9px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--tm);cursor:pointer;font-size:15px;line-height:1;padding:2px 4px">✕</button>
+               oninput="filtrarVentas(this.value)" aria-label="Buscar ventas por cliente">
+        <button id="v-clear" class="ventas-clear" onclick="limpiarFiltroVentas()"
+                aria-label="Limpiar búsqueda" title="Limpiar búsqueda">✕</button>
       </div>
-      <button id="btn-pendientes" onclick="togglePendientes()"
-              style="padding:9px 16px;border-radius:8px;border:1px solid var(--br);background:var(--s2);color:var(--tm);cursor:pointer;font-size:13px;font-family:inherit;white-space:nowrap;transition:all .2s">
+      <div class="ventas-date-group">
+        <label for="v-fecha">Fecha</label>
+        <input id="v-fecha" class="date-control" type="date"
+               onchange="filtrarFechaVentas(this.value)" aria-label="Filtrar ventas por fecha">
+        <button id="v-hoy" class="filter-reset" type="button" onclick="irAVentasHoy()">Hoy</button>
+      </div>
+      <button id="btn-pendientes" class="filter-toggle" onclick="togglePendientes()">
         🔴 Solo pendientes
       </button>
     </div>
-    <div id="v-filtro-info" style="display:none;background:var(--s2);border:1px solid var(--br);border-radius:8px;padding:10px 16px;margin-bottom:14px;font-size:13px;color:var(--tm)"></div>
+    <div id="v-filtro-info" class="ventas-filter-info"></div>
 
     <div class="tcard">
       <div class="thead">
-        <h3>Todas las Transacciones</h3>
+        <h3 id="v-title">Ventas del día</h3>
         <span class="badge" id="v-cnt"></span>
       </div>
       <div style="overflow-x:auto">

@@ -121,7 +121,99 @@
     z-index: 999; border-left: 4px solid var(--green); }
   #toast.show { transform: translateY(0); opacity: 1; }
   #toast.error { border-left-color: var(--red); }
+
+
+  /* ── Tema visual compartido con Control Neveras ─────────────── */
+  :root {
+    --bg: #0a0c10; --s1: #111318; --s2: #181c24; --br: #1e2330;
+    --ac: #00e5a0; --rd: #ff4f64; --yw: #ffb800; --bl: #3d8bff;
+    --tx: #e8ecf4; --tm: #6b7590; --td: #3d4560;
+    --red: var(--rd); --red-dark: #d83b52; --red-light: rgba(255,79,100,.12);
+    --dark: var(--tx); --gray: var(--tm); --light: var(--s2); --green: var(--ac);
+    --orange: var(--yw); --white: var(--tx); --border: var(--br);
+    --shadow: 0 12px 32px rgba(0,0,0,.18);
+  }
+  html, body { background: var(--bg); color: var(--tx); }
+  body { font-family: 'Space Grotesk', sans-serif; }
+  body, button, input, select, textarea { font-family: 'Space Grotesk', sans-serif; }
+  nav {
+    background: linear-gradient(135deg, #0d1117, #111827); border-bottom: 1px solid var(--br);
+    padding: 18px 28px; height: auto; box-shadow: none;
+  }
+  nav img { height: 42px; border-radius: 10px; }
+  nav .brand { gap: 12px; }
+  nav .brand-text { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 2px; }
+  nav .brand-text span { color: var(--ac); }
+  .tabs { background: var(--bg); border-bottom: 1px solid var(--br); padding: 14px 28px 0; overflow-x: auto; }
+  .tab { padding: 9px 18px; color: var(--tm); border-bottom: 2px solid transparent; margin-bottom: 0; font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .tab:hover { color: var(--tx); }
+  .tab.active { color: var(--ac); border-bottom-color: var(--ac); }
+  .panel { padding: 24px 28px; max-width: 1400px; }
+  .card, .stat-card { background: var(--s1); border: 1px solid var(--br); border-radius: 12px; box-shadow: none; }
+  .card-header { background: var(--s2); border-bottom: 1px solid var(--br); color: var(--tx); padding: 16px 20px; font-size: 12px; letter-spacing: 1px; }
+  .card-body { padding: 20px; }
+  .form-grid { gap: 14px; }
+  .form-group { gap: 5px; }
+  .form-group label { color: var(--tm); letter-spacing: 1px; }
+  .form-group input, .form-group select, .form-group textarea,
+  .search-bar input, .item-obs input, .estado-select, .add-item-bar input {
+    background: var(--s2); color: var(--tx); border: 1px solid var(--br); border-radius: 8px;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus,
+  .search-bar input:focus, .item-obs input:focus, .estado-select:focus, .add-item-bar input:focus {
+    outline: none; border-color: var(--ac); box-shadow: 0 0 0 3px rgba(0,229,160,.08);
+  }
+  .btn { border-radius: 8px; font-family: 'Space Grotesk', sans-serif; transition: transform .2s, background .2s, border-color .2s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:active { transform: scale(.97); }
+  .btn-red, .btn-green { background: var(--ac); color: #000; }
+  .btn-red:hover, .btn-green:hover { background: #00ffb3; }
+  .btn-dark, .btn-gray { background: var(--s2); color: var(--tx); border: 1px solid var(--br); }
+  .btn-dark:hover, .btn-gray:hover { background: #202633; border-color: #2a3048; }
+  .btn-outline { background: transparent; color: var(--tx); border: 1px solid var(--br); }
+  .btn-outline:hover { background: var(--s2); border-color: var(--ac); }
+  .btn-delete-item { color: var(--rd); }
+  .table-wrap { border-radius: 10px; }
+  table { color: var(--tx); }
+  thead th { background: var(--s2); color: var(--tm); border-bottom: 1px solid var(--br); letter-spacing: .8px; }
+  tbody tr { border-bottom: 1px solid rgba(255,255,255,.04); }
+  tbody tr:hover { background: rgba(255,255,255,.025); }
+  tbody td { border-bottom: 1px solid rgba(255,255,255,.04); }
+  .badge { background: var(--s2); color: var(--tm); border: 1px solid var(--br); }
+  td .badge.red { background: rgba(255,79,100,.12); color: var(--rd); }
+  .stats { gap: 14px; }
+  .stat-card { padding: 20px; border-top: 2px solid var(--rd); }
+  .stat-num { color: var(--tx); font-family: 'Bebas Neue', sans-serif; font-size: 32px; }
+  .stat-label { color: var(--tm); letter-spacing: 1px; }
+  .item-row { background: var(--s1); border-color: var(--br); border-radius: 10px; }
+  .item-row:hover { border-color: #2a3048; }
+  .item-row.custom { border-color: rgba(61,139,255,.45); background: rgba(61,139,255,.08); }
+  .item-name, .item-name.editable { color: var(--tx); }
+  .item-name.editable { border-bottom-color: rgba(61,139,255,.45); }
+  .item-name.editable:focus { border-bottom-color: var(--ac); }
+  .add-item-bar { background: rgba(61,139,255,.08); border-color: rgba(61,139,255,.45); }
+  .estado-select { font-weight: 600; }
+  .estado-select.Bueno { background: rgba(0,229,160,.12); border-color: var(--ac); color: var(--ac); }
+  .estado-select.Regular { background: rgba(255,184,0,.12); border-color: var(--yw); color: var(--yw); }
+  .estado-select.Malo { background: rgba(255,79,100,.12); border-color: var(--rd); color: var(--rd); }
+  .estado-select.NoAplica { background: var(--s2); border-color: var(--br); color: var(--tm); }
+  #toast { background: var(--s1); border: 1px solid var(--ac); color: var(--tx); box-shadow: var(--shadow); }
+  #toast.error { border-color: var(--rd); }
+  ::selection { background: rgba(0,229,160,.25); color: var(--tx); }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--br); border-radius: 3px; }
+  @media (max-width: 700px) {
+    nav { padding: 12px 14px; }
+    nav > div:last-child { flex-wrap: wrap; justify-content: flex-end; }
+    .panel { padding: 14px; }
+    .tabs { padding: 10px 14px 0; }
+    .card-body { padding: 14px; }
+  }
 </style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
 </head>
 <body>
 <script>const APP_BASE = "{{ request.script_root }}";</script>
